@@ -1,0 +1,742 @@
+const axios = require('axios');
+const cheerio = require('cheerio');
+const yahooFinance = require('yahoo-finance2').default;
+
+const NSE_BASE_URL = 'https://www.nseindia.com';
+const SYMBOL_HISTORY_START = '2000-01-01';
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+const monthMap = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11
+};
+
+const historicalCache = new Map();
+let nseCookieHeader = '';
+
+function getScreenerUrls(symbol) {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  return [
+    `https://www.screener.in/company/${normalizedSymbol}/consolidated/`,
+    `https://www.screener.in/company/${normalizedSymbol}/`
+  ];
+}
+
+function createHeaders(extraHeaders = {}) {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.nseindia.com/',
+    'Connection': 'keep-alive',
+    ...extraHeaders
+  };
+}
+
+function createYahooHeaders() {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://finance.yahoo.com/',
+    'Origin': 'https://finance.yahoo.com',
+    'Connection': 'keep-alive'
+  };
+}
+
+function formatDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function formatNseDate(date) {
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const year = date.getUTCFullYear();
+  return `${day}-${month}-${year}`;
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function endOfMonth(year, monthIndex) {
+  return new Date(Date.UTC(year, monthIndex + 1, 0));
+}
+
+function normalizeLabel(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[+:]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function parseNumber(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value)
+    .replace(/,/g, '')
+    .replace(/%/g, '')
+    .trim();
+
+  if (!normalized || normalized === '-' || /^ttm$/i.test(normalized)) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parsePeriodLabel(rawLabel) {
+  const label = String(rawLabel || '').trim();
+  if (!label || /^ttm$/i.test(label)) {
+    return null;
+  }
+
+  const fullYearMatch = label.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})$/i);
+  if (fullYearMatch) {
+    const monthIndex = monthMap[fullYearMatch[1].toLowerCase()];
+    const year = Number.parseInt(fullYearMatch[2], 10);
+    return formatDate(endOfMonth(year, monthIndex));
+  }
+
+  const shortYearMatch = label.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-' ](\d{2})$/i);
+  if (shortYearMatch) {
+    const monthIndex = monthMap[shortYearMatch[1].toLowerCase()];
+    const yy = Number.parseInt(shortYearMatch[2], 10);
+    const year = yy >= 70 ? 1900 + yy : 2000 + yy;
+    return formatDate(endOfMonth(year, monthIndex));
+  }
+
+  return null;
+}
+
+async function ensureNseCookies() {
+  if (nseCookieHeader) {
+    return nseCookieHeader;
+  }
+
+  const response = await axios.get(NSE_BASE_URL, {
+    headers: createHeaders({
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+    }),
+    timeout: 15000
+  });
+
+  const cookies = response.headers['set-cookie'] || [];
+  nseCookieHeader = cookies.map(cookie => cookie.split(';')[0]).join('; ');
+  return nseCookieHeader;
+}
+
+async function fetchHistoricalPricesFromNSE(symbol, startDate = SYMBOL_HISTORY_START, endDate = formatDate(new Date())) {
+  const cookies = await ensureNseCookies();
+  const priceMap = new Map();
+
+  let cursor = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+
+  while (cursor <= end) {
+    const chunkEnd = new Date(cursor);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + 364);
+    if (chunkEnd > end) {
+      chunkEnd.setTime(end.getTime());
+    }
+
+    const response = await axios.get(`${NSE_BASE_URL}/api/historical/cm/equity`, {
+      headers: createHeaders({ Cookie: cookies }),
+      params: {
+        symbol,
+        series: '["EQ"]',
+        from: formatNseDate(cursor),
+        to: formatNseDate(chunkEnd)
+      },
+      timeout: 20000
+    });
+
+    const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+    for (const row of rows) {
+      const date = row.CH_TIMESTAMP ? formatDate(new Date(row.CH_TIMESTAMP)) : null;
+      const close = parseNumber(row.CH_CLOSING_PRICE);
+
+      if (!date || close === null) {
+        continue;
+      }
+
+      priceMap.set(date, {
+        date,
+        open: parseNumber(row.CH_OPENING_PRICE),
+        high: parseNumber(row.CH_TRADE_HIGH_PRICE),
+        low: parseNumber(row.CH_TRADE_LOW_PRICE),
+        close,
+        price: close
+      });
+    }
+
+    cursor = addDays(chunkEnd, 1);
+  }
+
+  return Array.from(priceMap.values()).sort((left, right) => left.date.localeCompare(right.date));
+}
+
+async function fetchHistoricalPricesFromYahoo(symbol, startDate = SYMBOL_HISTORY_START, endDate = formatDate(new Date())) {
+  const ticker = `${symbol}.NS`;
+  const period1 = Math.floor(new Date(`${startDate}T00:00:00Z`).getTime() / 1000);
+  const period2 = Math.floor(new Date(`${endDate}T23:59:59Z`).getTime() / 1000);
+  const endpoints = [
+    `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}`
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await axios.get(endpoint, {
+        headers: createYahooHeaders(),
+        params: {
+          period1,
+          period2,
+          interval: '1d',
+          includeAdjustedClose: 'true',
+          events: 'div,splits'
+        },
+        timeout: 20000,
+        validateStatus: () => true,
+        responseType: 'text',
+        transformResponse: [data => data]
+      });
+
+      if (response.status === 429) {
+        throw new Error(`Yahoo chart endpoint rate-limited with status 429 at ${endpoint}`);
+      }
+
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`Yahoo chart endpoint failed with status ${response.status} at ${endpoint}`);
+      }
+
+      const payload = typeof response.data === 'string' ? JSON.parse(response.data) : response.data;
+      const result = payload?.chart?.result?.[0];
+      const timestamps = result?.timestamp || [];
+      const quote = result?.indicators?.quote?.[0] || {};
+
+      const rows = timestamps.map((timestamp, index) => ({
+        date: new Date(timestamp * 1000),
+        open: quote.open?.[index],
+        high: quote.high?.[index],
+        low: quote.low?.[index],
+        close: quote.close?.[index]
+      }));
+
+      const parsedRows = rows
+        .map(row => {
+          const close = parseNumber(row.close);
+          if (!row.date || close === null) {
+            return null;
+          }
+
+          return {
+            date: formatDate(new Date(row.date)),
+            open: parseNumber(row.open),
+            high: parseNumber(row.high),
+            low: parseNumber(row.low),
+            close,
+            price: close
+          };
+        })
+        .filter(Boolean)
+        .sort((left, right) => left.date.localeCompare(right.date));
+
+      if (parsedRows.length > 0) {
+        return parsedRows;
+      }
+    } catch (error) {
+      console.warn(`[Historical PE] Yahoo direct chart fetch failed for ${ticker}: ${error.message}`);
+    }
+  }
+
+  const rows = await yahooFinance.historical(ticker, {
+    period1: startDate,
+    period2: endDate,
+    interval: '1d'
+  });
+
+  return rows
+    .map(row => {
+      const close = parseNumber(row.close);
+      if (!row.date || close === null) {
+        return null;
+      }
+
+      return {
+        date: formatDate(new Date(row.date)),
+        open: parseNumber(row.open),
+        high: parseNumber(row.high),
+        low: parseNumber(row.low),
+        close,
+        price: close
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.date.localeCompare(right.date));
+}
+
+async function fetchHistoricalPrices(symbol, startDate = SYMBOL_HISTORY_START, endDate = formatDate(new Date())) {
+  try {
+    const prices = await fetchHistoricalPricesFromNSE(symbol, startDate, endDate);
+    if (prices.length > 0) {
+      return {
+        source: 'NSE historical equity candles',
+        records: prices
+      };
+    }
+  } catch (error) {
+    console.warn(`[Historical PE] NSE historical price fetch failed for ${symbol}: ${error.message}`);
+  }
+
+  const yahooPrices = await fetchHistoricalPricesFromYahoo(symbol, startDate, endDate);
+  if (!yahooPrices.length) {
+    throw new Error(`No historical prices returned for ${symbol} from NSE or Yahoo Finance`);
+  }
+
+  return {
+    source: 'Yahoo Finance historical candles',
+    records: yahooPrices
+  };
+}
+
+function extractSeriesFromTable($, table, acceptedLabels) {
+  const rows = $(table).find('tr');
+  if (!rows.length) {
+    return [];
+  }
+
+  const headers = [];
+  rows.first().find('th, td').each((index, cell) => {
+    if (index === 0) {
+      return;
+    }
+
+    headers.push(parsePeriodLabel($(cell).text()));
+  });
+
+  let extracted = [];
+  rows.each((_, row) => {
+    const cells = $(row).find('th, td');
+    if (!cells.length) {
+      return;
+    }
+
+    const label = normalizeLabel(cells.first().text());
+    if (!acceptedLabels.includes(label)) {
+      return;
+    }
+
+    const records = [];
+    cells.slice(1).each((index, cell) => {
+      const date = headers[index];
+      const eps = parseNumber($(cell).text());
+
+      if (!date || eps === null) {
+        return;
+      }
+
+      records.push({ date, eps });
+    });
+
+    extracted = records;
+  });
+
+  return extracted;
+}
+
+function getTableContextLabel($, table) {
+  const section = $(table).closest('section');
+  const headingText = normalizeLabel(
+    section.find('h2, h3').first().text() ||
+    $(table).prevAll('h2, h3').first().text()
+  );
+
+  return headingText;
+}
+
+async function extractEPSHistory(symbol) {
+  let html = null;
+  let selectedUrl = null;
+
+  for (const url of getScreenerUrls(symbol)) {
+    try {
+      const response = await axios.get(url, {
+        headers: createHeaders(),
+        timeout: 15000
+      });
+
+      html = response.data;
+      selectedUrl = url;
+      break;
+    } catch (error) {
+      console.warn(`[Historical PE] Screener EPS fetch failed for ${symbol} at ${url}: ${error.message}`);
+    }
+  }
+
+  if (!html) {
+    throw new Error(`Unable to fetch Screener EPS page for ${symbol}`);
+  }
+
+  const $ = cheerio.load(html);
+  const acceptedLabels = ['eps in rs', 'eps in rs.', 'eps'];
+
+  let quarterlyEPS = [];
+  let yearlyEPS = [];
+
+  $('table').each((_, table) => {
+    const contextLabel = getTableContextLabel($, table);
+    const series = extractSeriesFromTable($, table, acceptedLabels);
+
+    if (!series.length) {
+      return;
+    }
+
+    if (quarterlyEPS.length === 0 && contextLabel.includes('quarter')) {
+      quarterlyEPS = series;
+      return;
+    }
+
+    if (yearlyEPS.length === 0 && (contextLabel.includes('profit') || contextLabel.includes('loss') || contextLabel.includes('annual'))) {
+      yearlyEPS = series;
+      return;
+    }
+
+    if (quarterlyEPS.length === 0) {
+      quarterlyEPS = series;
+      return;
+    }
+
+    if (yearlyEPS.length === 0) {
+      yearlyEPS = series;
+    }
+  });
+
+  quarterlyEPS = quarterlyEPS
+    .filter(record => record.date && record.eps !== null)
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  yearlyEPS = yearlyEPS
+    .filter(record => record.date && record.eps !== null)
+    .sort((left, right) => left.date.localeCompare(right.date));
+
+  return {
+    quarterlyEPS,
+    yearlyEPS,
+    screenerUrl: selectedUrl
+  };
+}
+
+function buildTTMTimeline(quarterlyEPS, yearlyEPS) {
+  const timelineByDate = new Map();
+
+  yearlyEPS.forEach(record => {
+    timelineByDate.set(record.date, {
+      date: record.date,
+      ttmEPS: Number.parseFloat(record.eps.toFixed(2)),
+      source: 'yearly-eps'
+    });
+  });
+
+  if (quarterlyEPS.length >= 4) {
+    for (let index = 3; index < quarterlyEPS.length; index += 1) {
+      const window = quarterlyEPS.slice(index - 3, index + 1);
+      const ttmEPS = window.reduce((sum, item) => sum + item.eps, 0);
+
+      timelineByDate.set(quarterlyEPS[index].date, {
+        date: quarterlyEPS[index].date,
+        ttmEPS: Number.parseFloat(ttmEPS.toFixed(2)),
+        source: 'quarterly-ttm'
+      });
+    }
+  }
+
+  return Array.from(timelineByDate.values()).sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function mapPricesToLatestEPS(prices, ttmTimeline) {
+  if (!prices.length || !ttmTimeline.length) {
+    return [];
+  }
+
+  let epsIndex = -1;
+  const mapped = [];
+
+  for (const pricePoint of prices) {
+    while (
+      epsIndex + 1 < ttmTimeline.length &&
+      ttmTimeline[epsIndex + 1].date <= pricePoint.date
+    ) {
+      epsIndex += 1;
+    }
+
+    if (epsIndex < 0) {
+      continue;
+    }
+
+    const epsPoint = ttmTimeline[epsIndex];
+    if (!epsPoint.ttmEPS || epsPoint.ttmEPS <= 0) {
+      continue;
+    }
+
+    mapped.push({
+      date: pricePoint.date,
+      price: Number.parseFloat(pricePoint.price.toFixed(2)),
+      ttmEPS: Number.parseFloat(epsPoint.ttmEPS.toFixed(2)),
+      pe: Number.parseFloat((pricePoint.price / epsPoint.ttmEPS).toFixed(2)),
+      epsDate: epsPoint.date,
+      epsSource: epsPoint.source,
+      status: 'calculated'
+    });
+  }
+
+  return mapped;
+}
+
+function toMonthlySeries(records) {
+  const byMonth = new Map();
+
+  for (const record of records) {
+    byMonth.set(record.date.slice(0, 7), record);
+  }
+
+  return Array.from(byMonth.values()).sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function buildYearMatrix(records) {
+  const years = new Map();
+
+  for (const record of records) {
+    const [yearString, monthString] = record.date.split('-');
+    const year = Number.parseInt(yearString, 10);
+    const monthIndex = Number.parseInt(monthString, 10) - 1;
+
+    if (!years.has(year)) {
+      years.set(year, new Array(12).fill(null));
+    }
+
+    years.get(year)[monthIndex] = record.pe;
+  }
+
+  return Array.from(years.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([year, months]) => ({ year, months }));
+}
+
+function buildStats(records) {
+  const peValues = records.map(record => record.pe).filter(Number.isFinite);
+  const priceValues = records.map(record => record.price).filter(Number.isFinite);
+  const epsValues = records.map(record => record.ttmEPS).filter(Number.isFinite);
+  const average = values => values.reduce((sum, value) => sum + value, 0) / values.length;
+
+  return {
+    avgPE: Number.parseFloat(average(peValues).toFixed(2)),
+    minPE: Number.parseFloat(Math.min(...peValues).toFixed(2)),
+    maxPE: Number.parseFloat(Math.max(...peValues).toFixed(2)),
+    avgPrice: Number.parseFloat(average(priceValues).toFixed(2)),
+    avgTTMEPS: Number.parseFloat(average(epsValues).toFixed(2))
+  };
+}
+
+function buildPESummary(records, options = {}) {
+  const lookbackYears = Number.isFinite(options.lookbackYears) ? options.lookbackYears : 5;
+  const maxPE = Number.isFinite(options.maxPE) ? options.maxPE : 150;
+  const latestDate = records.length ? new Date(records[records.length - 1].date) : null;
+  const windowStart = latestDate instanceof Date && !Number.isNaN(latestDate.getTime())
+    ? new Date(latestDate.getFullYear() - lookbackYears, latestDate.getMonth(), latestDate.getDate())
+    : null;
+  const cleanedRecords = records.filter(record => {
+    const pe = Number.parseFloat(record.pe);
+    const recordDate = new Date(record.date);
+    return Number.isFinite(pe) &&
+      pe > 0 &&
+      pe < maxPE &&
+      recordDate instanceof Date &&
+      !Number.isNaN(recordDate.getTime()) &&
+      (!windowStart || recordDate >= windowStart);
+  });
+
+  if (!cleanedRecords.length) {
+    return {
+      lookbackYears,
+      cleanedRecords: 0,
+      valuation: 'N/A'
+    };
+  }
+
+  const latestRecord = cleanedRecords[cleanedRecords.length - 1];
+  const benchmarkRecords = cleanedRecords.length > 1 ? cleanedRecords.slice(0, -1) : cleanedRecords;
+  const benchmarkPEValues = benchmarkRecords
+    .map(record => Number.parseFloat(record.pe))
+    .sort((left, right) => left - right);
+  const count = benchmarkPEValues.length;
+  const percentileValue = (values, percentile) => {
+    if (!values.length) {
+      return null;
+    }
+
+    const index = Math.min(values.length - 1, Math.max(0, Math.floor(values.length * percentile)));
+    return values[index];
+  };
+  const medianPE = percentileValue(benchmarkPEValues, 0.5);
+  const highestPE = percentileValue(benchmarkPEValues, 0.9);
+  const lowestPE = percentileValue(benchmarkPEValues, 0.1);
+  const range = highestPE - lowestPE;
+  const percentile = range > 0 ? (latestRecord.pe - lowestPE) / range : 0.5;
+  const diffFromMedian = medianPE > 0 ? ((latestRecord.pe - medianPE) / medianPE) * 100 : 0;
+  const bandPosition = range > 0 ? ((latestRecord.pe - lowestPE) / range) * 100 : 50;
+  const medianBandPosition = range > 0 ? ((medianPE - lowestPE) / range) * 100 : 50;
+  const expectedMonths = Math.max(lookbackYears * 12, 1);
+  const coveragePct = Math.min((cleanedRecords.length / expectedMonths) * 100, 100);
+  const dataQuality = coveragePct > 90 ? 'High' : coveragePct > 70 ? 'Medium' : 'Low';
+  const fairPrice = Number.isFinite(latestRecord.ttmEPS) ? latestRecord.ttmEPS * medianPE : null;
+  const recentCutoff = new Date(latestRecord.date);
+  recentCutoff.setFullYear(recentCutoff.getFullYear() - 3);
+  const recentPEValues = benchmarkRecords
+    .filter(record => new Date(record.date) >= recentCutoff)
+    .map(record => Number.parseFloat(record.pe))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const olderPEValues = benchmarkRecords
+    .filter(record => new Date(record.date) < recentCutoff)
+    .map(record => Number.parseFloat(record.pe))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+  const recentMedianPE = percentileValue(recentPEValues, 0.5);
+  const olderMedianPE = percentileValue(olderPEValues, 0.5);
+  let trend = 'Stable';
+  if (Number.isFinite(recentMedianPE) && Number.isFinite(olderMedianPE)) {
+    trend = recentMedianPE < olderMedianPE ? 'Decreasing' : recentMedianPE > olderMedianPE ? 'Increasing' : 'Stable';
+  }
+
+  let valuation = 'FAIR';
+  let valuationLabel = 'FAIR VALUE';
+  if (diffFromMedian < -25) {
+    valuation = 'UNDERVALUED';
+    valuationLabel = 'STRONGLY UNDERVALUED';
+  } else if (diffFromMedian < -15) {
+    valuation = 'UNDERVALUED';
+    valuationLabel = 'UNDERVALUED';
+  } else if (diffFromMedian < 15) {
+    valuation = 'FAIR';
+    valuationLabel = 'FAIR VALUE';
+  } else if (diffFromMedian < 30) {
+    valuation = 'OVERVALUED';
+    valuationLabel = 'OVERVALUED';
+  } else {
+    valuation = 'OVERVALUED';
+    valuationLabel = 'HIGHLY OVERVALUED';
+  }
+
+  return {
+    lookbackYears,
+    cleanedRecords: cleanedRecords.length,
+    benchmarkRecords: benchmarkRecords.length,
+    currentPE: Number.parseFloat(latestRecord.pe.toFixed(2)),
+    medianPE: Number.parseFloat(medianPE.toFixed(2)),
+    highestPE: Number.parseFloat(highestPE.toFixed(2)),
+    lowestPE: Number.parseFloat(lowestPE.toFixed(2)),
+    valuation,
+    valuationLabel,
+    percentile: Number.parseFloat(percentile.toFixed(4)),
+    diffFromMedian: Number.parseFloat(diffFromMedian.toFixed(2)),
+    bandPosition: Number.parseFloat((Math.min(Math.max(bandPosition, 0), 100)).toFixed(2)),
+    medianBandPosition: Number.parseFloat((Math.min(Math.max(medianBandPosition, 0), 100)).toFixed(2)),
+    currentDate: latestRecord.date,
+    coveragePct: Number.parseFloat(coveragePct.toFixed(2)),
+    dataQuality,
+    trend,
+    recentMedianPE: Number.isFinite(recentMedianPE) ? Number.parseFloat(recentMedianPE.toFixed(2)) : null,
+    olderMedianPE: Number.isFinite(olderMedianPE) ? Number.parseFloat(olderMedianPE.toFixed(2)) : null,
+    fairPrice: Number.isFinite(fairPrice) ? Number.parseFloat(fairPrice.toFixed(2)) : null,
+    dateRange: {
+      from: cleanedRecords[0].date,
+      to: latestRecord.date
+    }
+  };
+}
+
+async function calculateHistoricalPE(symbol, options = {}) {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  if (!normalizedSymbol) {
+    throw new Error('Symbol is required');
+  }
+
+  const startDate = options.startDate || SYMBOL_HISTORY_START;
+  const endDate = options.endDate || formatDate(new Date());
+  const cacheKey = `${normalizedSymbol}:${startDate}:${endDate}`;
+  const cached = historicalCache.get(cacheKey);
+
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  const priceHistory = await fetchHistoricalPrices(normalizedSymbol, startDate, endDate);
+  const prices = priceHistory.records;
+  const { quarterlyEPS, yearlyEPS, screenerUrl } = await extractEPSHistory(normalizedSymbol);
+  const ttmTimeline = buildTTMTimeline(quarterlyEPS, yearlyEPS);
+  const monthlySeries = toMonthlySeries(mapPricesToLatestEPS(prices, ttmTimeline));
+
+  if (!monthlySeries.length) {
+    throw new Error(`No historical PE data could be calculated for ${normalizedSymbol}`);
+  }
+
+  const result = {
+    symbol: normalizedSymbol,
+    source: 'hybrid-calculated',
+    methodology: 'historical-price-plus-latest-available-eps',
+    totalRecords: monthlySeries.length,
+    dateRange: {
+      from: monthlySeries[0].date,
+      to: monthlySeries[monthlySeries.length - 1].date
+    },
+    data: monthlySeries,
+    years: buildYearMatrix(monthlySeries),
+    stats: buildStats(monthlySeries),
+    peSummary: buildPESummary(monthlySeries),
+    metadata: {
+      priceSource: priceHistory.source,
+      epsSource: quarterlyEPS.length >= 4 ? 'Screener quarterly EPS mapped as rolling TTM' : 'Screener yearly EPS fallback',
+      screenerUrl,
+      priceRecordsFetched: prices.length,
+      quarterlyEPSRecords: quarterlyEPS.length,
+      yearlyEPSRecords: yearlyEPS.length,
+      ttmRecordsBuilt: ttmTimeline.length,
+      outputFrequency: 'monthly',
+      peCleaningRule: 'Only PE values > 0 and < 150 are included, using a rolling 5-year window and excluding the latest point from low/high benchmarking',
+      peSummaryLookbackYears: 5
+    }
+  };
+
+  historicalCache.set(cacheKey, {
+    timestamp: Date.now(),
+    value: result
+  });
+
+  return result;
+}
+
+module.exports = {
+  fetchHistoricalPricesFromNSE,
+  fetchHistoricalPricesFromYahoo,
+  fetchHistoricalPrices,
+  extractEPSHistory,
+  buildTTMTimeline,
+  calculateHistoricalPE
+};

@@ -1,0 +1,519 @@
+/**
+ * HistoricalPEChart.css - Styling for Historical PE Chart Component
+ */
+
+.pe-chart-container {
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  border-radius: 12px;
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.pe-chart-container.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  background: #f8f9fa;
+}
+
+.pe-chart-container.loading p {
+  color: #666;
+  font-size: 16px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.pe-chart-container.error {
+  background: #ffe5e5;
+  border: 2px solid #ff6b6b;
+}
+
+.pe-chart-container.error p {
+  color: #c92a2a;
+  margin-bottom: 16px;
+}
+
+/* Header */
+.pe-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  border-bottom: 2px solid rgba(0, 0, 0, 0.1);
+  padding-bottom: 16px;
+}
+
+.pe-header h2 {
+  margin: 0;
+  color: #2d3748;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.source-badge {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #e3f2fd;
+  color: #1976d2;
+}
+
+.source-badge.real {
+  background: #fce4ec;
+  color: #c2185b;
+}
+
+.source-badge.mock {
+  background: #fff3e0;
+  color: #f57c00;
+}
+
+/* Statistics Grid */
+.pe-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.stat-card {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-left: 4px solid #4CAF50;
+  transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.stat-card label {
+  display: block;
+  font-size: 12px;
+  color: #7a8a99;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.stat-card .stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #2d3748;
+  margin-bottom: 8px;
+}
+
+.stat-card .stat-value.valuation-text {
+  font-size: 18px;
+  letter-spacing: 0.6px;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.stat-card .stat-value.valuation-text.undervalued {
+  color: #2f9e44;
+}
+
+.stat-card .stat-value.valuation-text.fair {
+  color: #e0a800;
+}
+
+.stat-card .stat-value.valuation-text.overvalued {
+  color: #d63336;
+}
+
+.stat-card .stat-value.valuation-text.na {
+  color: #6c757d;
+}
+
+.stat-card small {
+  display: block;
+  color: #a0aec0;
+  font-size: 13px;
+}
+
+.pe-band-card {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 32px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.pe-band-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.pe-band-widget {
+  position: relative;
+  padding-top: 58px;
+}
+
+.pe-band-slider-wrap {
+  padding: 0 8px;
+}
+
+.pe-band-slider-wrap .rc-slider {
+  padding: 0;
+}
+
+.pe-band-slider-wrap .rc-slider-handle-dragging.rc-slider-handle-dragging.rc-slider-handle-dragging {
+  box-shadow: none;
+}
+
+.pe-band-badge {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 86px;
+  max-width: 160px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.pe-band-badge.stacked {
+  top: 32px;
+}
+
+.pe-band-badge-current {
+  background: #111827;
+  box-shadow: 0 6px 18px rgba(17, 24, 39, 0.18);
+}
+
+.pe-band-badge-median {
+  background: #475569;
+  box-shadow: 0 6px 18px rgba(71, 85, 105, 0.18);
+}
+
+.pe-band-scale {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  margin-top: 18px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pe-band-scale span:nth-child(2) {
+  text-align: center;
+}
+
+.pe-band-scale span:last-child {
+  text-align: right;
+}
+
+.pe-band-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.pe-band-header h3 {
+  margin: 0;
+  color: #2d3748;
+  font-size: 16px;
+}
+
+.pe-band-header span {
+  color: #718096;
+  font-size: 13px;
+}
+
+.pe-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 0 16px 0;
+  color: #4a5568;
+  font-size: 13px;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.legend-dot.undervalued {
+  background: #2f9e44;
+}
+
+.legend-dot.fair {
+  background: #f1c40f;
+}
+
+.legend-dot.overvalued {
+  background: #d63336;
+}
+
+/* Data Table */
+.pe-table {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 32px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow-x: auto;
+}
+
+.pe-table h3 {
+  margin: 0 0 16px 0;
+  color: #2d3748;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.pe-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.pe-table thead {
+  background: #f7fafc;
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.pe-table th {
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #4a5568;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pe-table td {
+  padding: 12px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #2d3748;
+}
+
+.pe-table tbody tr:hover {
+  background: #f7fafc;
+}
+
+.pe-table .pe-value {
+  font-weight: 600;
+  color: #4CAF50;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.status-badge.valid {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.status-badge.outlier {
+  background: #fff3e0;
+  color: #e65100;
+}
+
+/* Methodology */
+.pe-methodology {
+  background: white;
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 32px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.pe-methodology h3 {
+  margin: 0 0 16px 0;
+  color: #2d3748;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.pe-methodology ol {
+  list-style: decimal;
+  margin-left: 20px;
+  padding: 0;
+}
+
+.pe-methodology li {
+  margin-bottom: 16px;
+  color: #4a5568;
+  line-height: 1.6;
+}
+
+.pe-methodology li strong {
+  color: #2d3748;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.pe-methodology li p {
+  margin: 4px 0 0 0;
+  font-size: 14px;
+  color: #718096;
+}
+
+.learn-btn {
+  margin-top: 16px;
+  padding: 10px 20px;
+  background: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.learn-btn:hover {
+  background: #45a049;
+  transform: translateX(2px);
+}
+
+/* Controls */
+.pe-controls {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pe-controls button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.btn-refresh {
+  background: #2196F3;
+  color: white;
+}
+
+.btn-refresh:hover {
+  background: #1976D2;
+  box-shadow: 0 4px 12px rgba(25, 118, 210, 0.4);
+}
+
+.btn-toggle {
+  background: #FF9800;
+  color: white;
+}
+
+.btn-toggle:hover {
+  background: #f57c00;
+  box-shadow: 0 4px 12px rgba(255, 152, 0, 0.4);
+}
+
+.btn-export {
+  background: #4CAF50;
+  color: white;
+}
+
+.btn-export:hover {
+  background: #45a049;
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+}
+
+/* Animations */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .pe-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .pe-stats {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .stat-card .stat-value {
+    font-size: 22px;
+  }
+
+  .pe-methodology ol {
+    margin-left: 16px;
+  }
+
+  .pe-controls {
+    flex-direction: column;
+  }
+
+  .pe-controls button {
+    width: 100%;
+  }
+
+  .pe-table {
+    padding: 12px;
+  }
+
+  .pe-table th,
+  .pe-table td {
+    padding: 8px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .pe-chart-container {
+    padding: 16px;
+  }
+
+  .pe-header h2 {
+    font-size: 18px;
+  }
+
+  .stat-card {
+    padding: 16px;
+  }
+
+  .stat-card .stat-value {
+    font-size: 18px;
+  }
+
+  .pe-table table {
+    font-size: 12px;
+  }
+}

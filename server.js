@@ -3,6 +3,7 @@ const axios = require('axios');
 const cors = require('cors');
 const cheerio = require('cheerio');
 const { calculateHistoricalPE } = require('./historical-pe');
+const { indexAnalysisData, getIndexByName, getIndexComparison } = require('./index-analysis-data');
 
 const app = express();
 app.use(cors());
@@ -80,6 +81,55 @@ function getScreenerUrls(symbol) {
     `https://www.screener.in/company/${normalizedSymbol}/consolidated/`,
     `https://www.screener.in/company/${normalizedSymbol}/`
   ];
+}
+
+function chunkArray(items, size) {
+  const chunks = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+
+  return chunks;
+}
+
+async function fetchHeatmapStocksBatched(symbols, batchSize = 8) {
+  const normalizedBatchSize = Math.max(1, Number.parseInt(batchSize, 10) || 8);
+  const batches = chunkArray(symbols, normalizedBatchSize);
+  const results = [];
+
+  for (const batch of batches) {
+    const batchResults = await Promise.all(
+      batch.map(async (symbol) => {
+        try {
+          console.log(`Fetching heatmap data for ${symbol}...`);
+
+          const nseData = await fetchNSEQuote(symbol);
+
+          if (!nseData || !nseData.priceInfo) {
+            return null;
+          }
+
+          const priceInfo = nseData.priceInfo;
+          return {
+            symbol,
+            name: symbol,
+            price: getCurrentPrice(priceInfo),
+            change: priceInfo.change,
+            changePercent: priceInfo.pChange,
+            volume: nseData.securityInfo?.totalTradedVolume || 0
+          };
+        } catch (error) {
+          console.error(`Error fetching heatmap data for ${symbol}:`, error.message);
+          return null;
+        }
+      })
+    );
+
+    results.push(...batchResults.filter(Boolean));
+  }
+
+  return results;
 }
 
 // NSE API Functions
@@ -541,54 +591,33 @@ app.get('/api/historical-pe/:symbol', async (req, res) => {
 app.get('/api/nifty50-heatmap/:period', async (req, res) => {
   try {
     const { period } = req.params; // daily, weekly, monthly
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const requestedBatchSize = Number.parseInt(req.query.batchSize, 10);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? requestedLimit
+      : 100;
+    const batchSize = Number.isFinite(requestedBatchSize) && requestedBatchSize > 0
+      ? requestedBatchSize
+      : 8;
     
-    console.log(`Fetching Nifty 50 heatmap data for ${period} period...`);
-    
-    const results = [];
-    let successCount = 0;
-    
-    // Fetch data for first 20 stocks to avoid timeout (can be expanded)
-    const stocksToFetch = nifty50Symbols.slice(0, 20);
-    
-    for (let i = 0; i < stocksToFetch.length; i++) {
-      try {
-        if (i > 0) await new Promise(resolve => setTimeout(resolve, 300)); // Small delay
-        
-        const symbol = stocksToFetch[i];
-        console.log(`Fetching heatmap data for ${symbol}...`);
-        
-        const nseData = await fetchNSEQuote(symbol);
-        
-        if (nseData && nseData.priceInfo) {
-          const priceInfo = nseData.priceInfo;
-          results.push({
-            symbol: symbol,
-            name: symbol, // Can be improved with full names
-            price: getCurrentPrice(priceInfo),
-            change: priceInfo.change,
-            changePercent: priceInfo.pChange,
-            volume: nseData.securityInfo?.totalTradedVolume || 0
-          });
-          successCount++;
-        }
-      } catch (error) {
-        console.error(`Error fetching heatmap data for ${stocksToFetch[i]}:`, error.message);
-      }
-    }
-    
-    if (successCount === 0) {
+    console.log(`Fetching Nifty 50 heatmap data for ${period} period with limit=${limit} and batchSize=${batchSize}...`);
+
+    const stocksToFetch = nifty50Symbols.slice(0, limit);
+    const results = await fetchHeatmapStocksBatched(stocksToFetch, batchSize);
+
+    if (results.length === 0) {
       return res.status(503).json({ 
         error: 'Unable to fetch heatmap data from NSE API',
         message: 'Please try again later'
       });
     }
     
-    console.log(`Returning heatmap data for ${successCount} stocks`);
+    console.log(`Returning heatmap data for ${results.length} stocks`);
     res.json({
       period: period,
       timestamp: new Date().toISOString(),
       stocks: results,
-      totalStocks: successCount
+      totalStocks: results.length
     });
     
   } catch (error) {
@@ -621,6 +650,94 @@ app.get('/api/all-nifty50-stocks', async (req, res) => {
     res.status(500).json({ 
       error: 'Unable to fetch stocks list',
       message: 'An error occurred while fetching stocks list.'
+    });
+  }
+});
+
+app.get('/api/index/current', async (req, res) => {
+  try {
+    const indexRecord = getIndexByName(req.query.name);
+
+    if (!indexRecord) {
+      return res.status(404).json({
+        error: 'Index not found',
+        message: 'Please provide a valid index name such as NIFTY50, NIFTYBANK, or NIFTYIT.'
+      });
+    }
+
+    res.json({
+      name: indexRecord.name,
+      symbol: indexRecord.symbol,
+      description: indexRecord.description,
+      pe: indexRecord.peSummary.currentPE,
+      pb: indexRecord.pb,
+      dy: indexRecord.dy,
+      peSummary: indexRecord.peSummary
+    });
+  } catch (error) {
+    console.error('Index current API Error:', error);
+    res.status(500).json({
+      error: 'Index current service error',
+      message: 'Unable to fetch current index metrics.'
+    });
+  }
+});
+
+app.get('/api/index/history', async (req, res) => {
+  try {
+    const indexRecord = getIndexByName(req.query.name);
+
+    if (!indexRecord) {
+      return res.status(404).json({
+        error: 'Index not found',
+        message: 'Please provide a valid index name such as NIFTY50, NIFTYBANK, or NIFTYIT.'
+      });
+    }
+
+    res.json({
+      name: indexRecord.name,
+      symbol: indexRecord.symbol,
+      peSummary: indexRecord.peSummary,
+      years: indexRecord.years,
+      history: indexRecord.series
+    });
+  } catch (error) {
+    console.error('Index history API Error:', error);
+    res.status(500).json({
+      error: 'Index history service error',
+      message: 'Unable to fetch historical index PE data.'
+    });
+  }
+});
+
+app.get('/api/index/comparison', async (req, res) => {
+  try {
+    res.json({
+      updatedAt: new Date().toISOString(),
+      indexes: getIndexComparison()
+    });
+  } catch (error) {
+    console.error('Index comparison API Error:', error);
+    res.status(500).json({
+      error: 'Index comparison service error',
+      message: 'Unable to fetch index comparison data.'
+    });
+  }
+});
+
+app.get('/api/index/list', async (req, res) => {
+  try {
+    res.json({
+      indexes: indexAnalysisData.map((item) => ({
+        name: item.name,
+        symbol: item.symbol
+      }))
+    });
+  } catch (error) {
+    console.error('Index list API Error:', error);
+    res.status(500).json({
+      error: 'Index list service error',
+      message: 'Unable to fetch index list.'
     });
   }
 });

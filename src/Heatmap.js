@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import PEBand from './components/PEBand';
 
 function buildYearsFromSeries(series) {
@@ -42,6 +43,24 @@ function formatPercentDiff(value) {
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
+function getMarketMoodMessage(summary) {
+  if (!summary || !Number.isFinite(summary.diffFromMedian)) {
+    return 'Market is near its 5Y median valuation';
+  }
+
+  const lookbackYears = summary.lookbackYears || 5;
+
+  if (summary.diffFromMedian > 5) {
+    return `Market is trading above its ${lookbackYears}Y median valuation`;
+  }
+
+  if (summary.diffFromMedian < -5) {
+    return `Market is trading below its ${lookbackYears}Y median valuation`;
+  }
+
+  return `Market is near its ${lookbackYears}Y median valuation`;
+}
+
 function getPECellColors(pe, summary) {
   if (!Number.isFinite(pe)) {
     return { backgroundColor: '#f8f9fa', color: '#999' };
@@ -73,15 +92,19 @@ const Heatmap = () => {
   const [historicalLoading, setHistoricalLoading] = useState(false);
   const [historicalError, setHistoricalError] = useState(null);
   const period = 'monthly';
+  const heatmapLimit = 100;
+  const heatmapBatchSize = 8;
 
   useEffect(() => {
     const fetchHeatmapData = async () => {
       try {
         setLoading(true);
         setError(null);
-        console.log(`Fetching heatmap data for ${period}...`);
+        console.log(`Fetching heatmap data for ${period} with limit=${heatmapLimit} and batchSize=${heatmapBatchSize}...`);
         
-        const response = await fetch(`http://localhost:4000/api/nifty50-heatmap/${period}`);
+        const response = await fetch(
+          `http://localhost:4000/api/nifty50-heatmap/${period}?limit=${heatmapLimit}&batchSize=${heatmapBatchSize}`
+        );
         
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -90,6 +113,10 @@ const Heatmap = () => {
         const data = await response.json();
         console.log('Heatmap data received:', data);
         setHeatmapData(data);
+        if (!selectedStock && data?.stocks?.length) {
+          fetchStockMetrics(data.stocks[0].symbol);
+          fetchHistoricalPE(data.stocks[0].symbol);
+        }
         setLoading(false);
       } catch (err) {
         console.error('Heatmap fetch error:', err);
@@ -99,7 +126,7 @@ const Heatmap = () => {
     };
 
     fetchHeatmapData();
-  }, [period]);
+  }, [period, selectedStock]);
 
   const fetchStockMetrics = (symbol) => {
     setMetricsLoading(true);
@@ -158,9 +185,15 @@ const Heatmap = () => {
 
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
+      <div style={{ marginBottom: '16px' }}>
+        <Link to="/" style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>
+          Back to modules
+        </Link>
+      </div>
+
       {/* Header */}
       <div style={{ marginBottom: '30px' }}>
-        <h1 style={{ color: '#333', marginBottom: '20px' }}>Stock Fundamentals Analyzer</h1>
+        <h1 style={{ color: '#333', marginBottom: '20px' }}>Stock Analysis Dashboard</h1>
         
         {/* Stock Selector */}
         {heatmapData && (
@@ -361,6 +394,21 @@ const Heatmap = () => {
                     </div>
                     <div style={{ fontSize: '12px', color: '#94a3b8' }}>
                       3Y median vs earlier history
+                    </div>
+                  </div>
+                  <div style={{
+                    background: '#fff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '10px',
+                    padding: '14px 16px',
+                    boxShadow: '0 3px 12px rgba(15, 23, 42, 0.05)'
+                  }}>
+                    <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', color: '#64748b', marginBottom: '8px' }}>Market Mood</div>
+                    <div style={{ fontSize: '18px', fontWeight: 800, marginBottom: '6px', color: '#1e293b', lineHeight: 1.35 }}>
+                      {getMarketMoodMessage(historicalPE.peSummary)}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                      Based on current PE versus the {historicalPE.peSummary.lookbackYears || 5}Y median
                     </div>
                   </div>
                 </div>

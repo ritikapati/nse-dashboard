@@ -1,12 +1,38 @@
+const cron = require('node-cron');
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const cheerio = require('cheerio');
 const { calculateHistoricalPE } = require('./historical-pe');
 const { indexCatalog, getIndexByName } = require('./index-analysis-data');
+const {
+  syncIndexCatalog,
+  listIndices,
+  upsertIndexValuation,
+  getLatestIndexValuation,
+  getIndexHistory,
+  getIndexSummary,
+  getComparisonSnapshot
+} = require('./index-valuation-store');
 
 const app = express();
 app.use(cors());
+
+syncIndexCatalog()
+  .then(() => refreshAllIndexValuations().catch((error) => {
+    console.error('Initial index valuation refresh failed:', error.message);
+  }))
+  .catch((error) => {
+    console.error('Index database initialization failed:', error.message);
+  });
+
+cron.schedule('0 18 * * *', () => {
+  refreshAllIndexValuations().catch((error) => {
+    console.error('Scheduled index valuation refresh failed:', error.message);
+  });
+}, {
+  timezone: 'Asia/Kolkata'
+});
 
 // NSE API Configuration
 const NSE_BASE_URL = 'https://www.nseindia.com/api';
@@ -123,6 +149,7 @@ async function fetchIndexSnapshot(indexMeta) {
   return {
     name: indexMeta.name,
     symbol: indexMeta.symbol,
+    slug: indexMeta.slug,
     description: indexMeta.description,
     price: parseMarketNumber(indexRow.last ?? indexRow.lastPrice ?? indexRow.close),
     change: parseMarketNumber(indexRow.variation ?? indexRow.change),
@@ -133,6 +160,31 @@ async function fetchIndexSnapshot(indexMeta) {
     asOf: new Date().toISOString(),
     source: 'NSE'
   };
+}
+
+async function refreshAllIndexValuations() {
+  const snapshots = [];
+
+  for (const indexMeta of indexCatalog) {
+    try {
+      const snapshot = await fetchIndexSnapshot(indexMeta);
+      await upsertIndexValuation(indexMeta.symbol, {
+        date: new Date().toISOString().slice(0, 10),
+        price: snapshot.price,
+        pe: snapshot.pe,
+        pb: snapshot.pb,
+        dy: snapshot.dy,
+        changeAmount: snapshot.change,
+        changePercent: snapshot.changePercent,
+        source: snapshot.source
+      });
+      snapshots.push(snapshot);
+    } catch (error) {
+      console.error(`Index valuation refresh failed for ${indexMeta.symbol}:`, error.message);
+    }
+  }
+
+  return snapshots;
 }
 
 function getScreenerUrls(symbol) {
@@ -243,25 +295,18 @@ async function fetchNifty50Index() {
 
 async function fetchNifty50PE() {
   try {
-    // Try to get PE data from NSE indices
-    const response = await axios.get(`${NSE_BASE_URL}/equity-stockIndices?index=NIFTY%2050`, {
-      headers: nseHeaders,
-      timeout: 10000
-    });
-    
-    if (response.data && response.data.data && response.data.data.length > 0) {
-      const niftyData = response.data.data.find(item => item.index === 'NIFTY 50');
-      if (niftyData) {
-        return {
-          pe: niftyData.pe ?? null,
-          pb: niftyData.pb ?? null,
-          dy: niftyData.dy ?? null,
-          last: niftyData.last,
-          change: niftyData.change,
-          pChange: niftyData.pChange
-        };
-      }
+    const snapshot = await fetchIndexSnapshot(getIndexByName('NIFTY50'));
+    if (snapshot) {
+      return {
+        pe: snapshot.pe,
+        pb: snapshot.pb,
+        dy: snapshot.dy,
+        last: snapshot.price,
+        change: snapshot.change,
+        pChange: snapshot.changePercent
+      };
     }
+
     return null;
   } catch (error) {
     console.error('Error fetching Nifty 50 PE:', error.message);
@@ -438,10 +483,14 @@ async function fetchStockMetrics(symbol) {
     
     // First, get real-time price from NSE API
     let price = null;
+    let change = null;
+    let changePercent = null;
     try {
       const nseData = await fetchNSEQuote(symbol);
       if (nseData && nseData.priceInfo) {
         price = getCurrentPrice(nseData.priceInfo);
+        change = parseMarketNumber(nseData.priceInfo.change);
+        changePercent = parseMarketNumber(nseData.priceInfo.pChange);
         console.log(`Got NSE price for ${symbol}: ${price}`);
       }
     } catch (error) {
@@ -539,6 +588,8 @@ async function fetchStockMetrics(symbol) {
       pb,
       dy,
       price,
+      change,
+      changePercent,
       latestTTMEPS,
       screenerStockPE,
       source: pe !== null && latestTTMEPS !== null
@@ -725,8 +776,30 @@ app.get('/api/index/current', async (req, res) => {
       });
     }
 
-    const snapshot = await fetchIndexSnapshot(indexRecord);
-    res.json(snapshot);
+    let latest = await getLatestIndexValuation(indexRecord.symbol);
+
+    if (!latest?.date) {
+      const snapshot = await fetchIndexSnapshot(indexRecord);
+      await upsertIndexValuation(indexRecord.symbol, {
+        date: new Date().toISOString().slice(0, 10),
+        price: snapshot.price,
+        pe: snapshot.pe,
+        pb: snapshot.pb,
+        dy: snapshot.dy,
+        changeAmount: snapshot.change,
+        changePercent: snapshot.changePercent,
+        source: snapshot.source
+      });
+      latest = await getLatestIndexValuation(indexRecord.symbol);
+    }
+
+    const summary = await getIndexSummary(indexRecord.symbol);
+
+    res.json({
+      ...latest,
+      asOf: latest.updatedAt || null,
+      summary
+    });
   } catch (error) {
     console.error('Index current API Error:', error);
     res.status(500).json({
@@ -747,11 +820,16 @@ app.get('/api/index/history', async (req, res) => {
       });
     }
 
-    res.status(501).json({
+    const limit = Math.max(1, Number.parseInt(req.query.limit, 10) || 260);
+    const history = await getIndexHistory(indexRecord.symbol, limit);
+    const summary = await getIndexSummary(indexRecord.symbol);
+
+    res.json({
       name: indexRecord.name,
       symbol: indexRecord.symbol,
-      available: false,
-      message: 'Historical index PE data is not available from the current live source, so no synthetic history is returned.'
+      history: history?.history || [],
+      summary,
+      available: Boolean(history?.history?.length)
     });
   } catch (error) {
     console.error('Index history API Error:', error);
@@ -762,34 +840,33 @@ app.get('/api/index/history', async (req, res) => {
   }
 });
 
+app.get('/api/index/valuation', async (req, res) => {
+  try {
+    const indexRecord = getIndexByName(req.query.name);
+
+    if (!indexRecord) {
+      return res.status(404).json({
+        error: 'Index not found',
+        message: 'Please provide a valid index identifier.'
+      });
+    }
+
+    const summary = await getIndexSummary(indexRecord.symbol);
+    res.json(summary);
+  } catch (error) {
+    console.error('Index valuation API Error:', error);
+    res.status(500).json({
+      error: 'Index valuation service error',
+      message: 'Unable to compute index valuation summary.'
+    });
+  }
+});
+
 app.get('/api/index/comparison', async (req, res) => {
   try {
-    const snapshots = await Promise.all(
-      indexCatalog.map(async (item) => {
-        try {
-          return await fetchIndexSnapshot(item);
-        } catch (error) {
-          console.error(`Index comparison fetch failed for ${item.symbol}:`, error.message);
-          return {
-            name: item.name,
-            symbol: item.symbol,
-            description: item.description,
-            price: null,
-            change: null,
-            changePercent: null,
-            pe: null,
-            pb: null,
-            dy: null,
-            asOf: null,
-            source: 'NSE'
-          };
-        }
-      })
-    );
-
     res.json({
       updatedAt: new Date().toISOString(),
-      indexes: snapshots
+      indexes: await getComparisonSnapshot()
     });
   } catch (error) {
     console.error('Index comparison API Error:', error);
@@ -803,10 +880,7 @@ app.get('/api/index/comparison', async (req, res) => {
 app.get('/api/index/list', async (req, res) => {
   try {
     res.json({
-      indexes: indexCatalog.map((item) => ({
-        name: item.name,
-        symbol: item.symbol
-      }))
+      indexes: await listIndices()
     });
   } catch (error) {
     console.error('Index list API Error:', error);

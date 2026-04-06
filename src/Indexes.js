@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   FormControl,
@@ -6,16 +6,7 @@ import {
   MenuItem,
   Select
 } from '@mui/material';
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from 'recharts';
+import HistoricalPEInsights from './components/HistoricalPEInsights';
 
 function formatValue(value, suffix = '') {
   if (!Number.isFinite(value)) {
@@ -36,32 +27,13 @@ function formatPrice(value) {
   })}`;
 }
 
-function StatCard({ title, value, helper, valueColor = '#1e293b' }) {
-  return (
-    <div style={{
-      background: '#fff',
-      border: '1px solid #e2e8f0',
-      borderRadius: '10px',
-      padding: '14px 16px',
-      boxShadow: '0 3px 12px rgba(15, 23, 42, 0.05)'
-    }}>
-      <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', color: '#64748b', marginBottom: '8px' }}>
-        {title}
-      </div>
-      <div style={{ fontSize: '24px', fontWeight: 700, color: valueColor, marginBottom: '6px' }}>
-        {value}
-      </div>
-      <div style={{ fontSize: '12px', color: '#94a3b8' }}>{helper}</div>
-    </div>
-  );
-}
-
 export default function Indexes() {
   const [indexOptions, setIndexOptions] = useState([]);
   const [selectedSymbol, setSelectedSymbol] = useState('NIFTY50');
   const [currentMetrics, setCurrentMetrics] = useState(null);
   const [historyData, setHistoryData] = useState(null);
   const [comparisonData, setComparisonData] = useState([]);
+  const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -94,7 +66,7 @@ export default function Indexes() {
 
         const [currentResponse, historyResponse, comparisonResponse] = await Promise.all([
           fetch(`http://localhost:4000/api/index/current?name=${selectedSymbol}`),
-          fetch(`http://localhost:4000/api/index/history?name=${selectedSymbol}`),
+          fetch(`http://localhost:4000/api/index/history?name=${selectedSymbol}&limit=5000`),
           fetch('http://localhost:4000/api/index/comparison')
         ]);
 
@@ -125,7 +97,43 @@ export default function Indexes() {
 
     fetchIndexDashboard();
   }, [selectedSymbol]);
-  const chartData = useMemo(() => historyData?.history || [], [historyData]);
+
+  const summary = currentMetrics?.summary || historyData?.summary || null;
+  const sortedComparisonData = [...comparisonData].sort((left, right) => {
+    const { key, direction } = sortConfig;
+    const multiplier = direction === 'asc' ? 1 : -1;
+
+    const getValue = (item) => {
+      if (key === 'name' || key === 'sector') {
+        return String(item[key] || '');
+      }
+
+      return Number.isFinite(item[key]) ? item[key] : Number.NEGATIVE_INFINITY;
+    };
+
+    const leftValue = getValue(left);
+    const rightValue = getValue(right);
+
+    if (typeof leftValue === 'string' || typeof rightValue === 'string') {
+      return leftValue.localeCompare(rightValue) * multiplier;
+    }
+
+    return (leftValue - rightValue) * multiplier;
+  });
+
+  const toggleSort = (key) => {
+    setSortConfig((current) => (
+      current.key === key
+        ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+        : { key, direction: key === 'name' || key === 'sector' ? 'asc' : 'desc' }
+    ));
+  };
+
+  const renderSortLabel = (label, key) => {
+    const isActive = sortConfig.key === key;
+    const arrow = !isActive ? '↕' : sortConfig.direction === 'asc' ? '↑' : '↓';
+    return `${label} ${arrow}`;
+  };
 
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
@@ -243,57 +251,11 @@ export default function Indexes() {
             </div>
           </div>
 
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
-            gap: '12px',
-            marginBottom: '18px'
-          }}>
-            <StatCard title="Price" value={formatPrice(currentMetrics.price)} helper="Live NSE index value" />
-            <StatCard title="PE Ratio" value={formatValue(currentMetrics.pe)} helper="Live NSE valuation metric" />
-            <StatCard title="PB Ratio" value={formatValue(currentMetrics.pb)} helper="Live NSE valuation metric" />
-            <StatCard title="Div. Yield" value={formatValue(currentMetrics.dy, '%')} helper="Live NSE yield metric" />
-            <StatCard title="Data Source" value={currentMetrics.source || 'N/A'} helper={currentMetrics.asOf ? `Fetched ${new Date(currentMetrics.asOf).toLocaleString('en-IN')}` : 'Timestamp unavailable'} />
-          </div>
-
-          {chartData.length > 0 ? (
-            <div style={{
-              background: '#fff',
-              border: '1px solid #e2e8f0',
-              borderRadius: '12px',
-              padding: '16px',
-              boxShadow: '0 3px 12px rgba(15, 23, 42, 0.05)',
-              marginBottom: '30px'
-            }}>
-              <div style={{ marginBottom: '10px', color: '#475569', fontSize: '13px', fontWeight: 600 }}>
-                Historical PE Chart
-              </div>
-              <div style={{ width: '100%', height: '320px' }}>
-                <ResponsiveContainer>
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} minTickGap={20} />
-                    <YAxis tick={{ fontSize: 12 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Line type="monotone" dataKey="pe" stroke="#0f766e" strokeWidth={3} dot={false} name="PE" />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          ) : (
-            <div style={{
-              background: '#fff',
-              border: '1px solid #e2e8f0',
-              borderRadius: '12px',
-              padding: '16px',
-              boxShadow: '0 3px 12px rgba(15, 23, 42, 0.05)',
-              marginBottom: '30px',
-              color: '#64748b'
-            }}>
-              {historyData?.message || 'Historical index PE data is unavailable from the current live source.'}
-            </div>
-          )}
+          <HistoricalPEInsights
+            summary={summary}
+            records={historyData?.history || []}
+            emptyMessage={summary?.message || historyData?.message || 'Historical index valuation data has not been imported yet.'}
+          />
 
           <div style={{ marginBottom: '30px', overflowX: 'auto' }}>
             <div style={{ marginBottom: '10px', color: '#475569', fontSize: '13px', fontWeight: 600 }}>
@@ -308,17 +270,49 @@ export default function Indexes() {
             }}>
               <thead>
                 <tr style={{ background: '#f5f5f5' }}>
-                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Index</th>
-                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Price</th>
-                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>PE Ratio</th>
-                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>PB Ratio</th>
-                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Div. Yield</th>
+                  <th
+                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
+                    onClick={() => toggleSort('name')}
+                  >
+                    {renderSortLabel('Index', 'name')}
+                  </th>
+                  <th
+                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
+                    onClick={() => toggleSort('sector')}
+                  >
+                    {renderSortLabel('Sector', 'sector')}
+                  </th>
+                  <th
+                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
+                    onClick={() => toggleSort('price')}
+                  >
+                    {renderSortLabel('Price', 'price')}
+                  </th>
+                  <th
+                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
+                    onClick={() => toggleSort('pe')}
+                  >
+                    {renderSortLabel('PE Ratio', 'pe')}
+                  </th>
+                  <th
+                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
+                    onClick={() => toggleSort('pb')}
+                  >
+                    {renderSortLabel('PB Ratio', 'pb')}
+                  </th>
+                  <th
+                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
+                    onClick={() => toggleSort('dy')}
+                  >
+                    {renderSortLabel('Div. Yield', 'dy')}
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {comparisonData.map((item) => (
+                {sortedComparisonData.map((item) => (
                   <tr key={item.symbol} style={{ background: item.symbol === selectedSymbol ? '#eff6ff' : '#fff' }}>
                     <td style={{ padding: '12px', border: '1px solid #ddd', fontWeight: 600 }}>{item.name}</td>
+                    <td style={{ padding: '12px', border: '1px solid #ddd' }}>{item.sector || 'Uncategorized'}</td>
                     <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatPrice(item.price)}</td>
                     <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatValue(item.pe)}</td>
                     <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatValue(item.pb)}</td>

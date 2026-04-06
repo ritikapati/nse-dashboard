@@ -627,21 +627,12 @@ function buildPESummary(records, options = {}) {
 
   let valuation = 'FAIR';
   let valuationLabel = 'FAIR VALUE';
-  if (diffFromMedian < -25) {
-    valuation = 'UNDERVALUED';
-    valuationLabel = 'STRONGLY UNDERVALUED';
-  } else if (diffFromMedian < -15) {
+  if (latestRecord.pe < medianPE * 0.9) {
     valuation = 'UNDERVALUED';
     valuationLabel = 'UNDERVALUED';
-  } else if (diffFromMedian < 15) {
-    valuation = 'FAIR';
-    valuationLabel = 'FAIR VALUE';
-  } else if (diffFromMedian < 30) {
+  } else if (latestRecord.pe > medianPE * 1.1) {
     valuation = 'OVERVALUED';
     valuationLabel = 'OVERVALUED';
-  } else {
-    valuation = 'OVERVALUED';
-    valuationLabel = 'HIGHLY OVERVALUED';
   }
 
   return {

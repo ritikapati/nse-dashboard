@@ -1,6 +1,4 @@
-import React from 'react';
-import Slider from 'rc-slider';
-import 'rc-slider/assets/index.css';
+import React, { useEffect, useMemo, useState } from 'react';
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
@@ -16,6 +14,41 @@ function toPercent(value, min, max) {
   return clamp(((value - min) / (max - min)) * 100, 0, 100);
 }
 
+function toBandPercent(value, low, median, high) {
+  const lower = median * 0.9;
+  const upper = median * 1.1;
+
+  if (!Number.isFinite(value) || !Number.isFinite(low) || !Number.isFinite(median) || !Number.isFinite(high)) {
+    return 50;
+  }
+
+  if (value <= lower) {
+    return toPercent(value, low, lower) * (1 / 3);
+  }
+
+  if (value <= upper) {
+    return 33.3333 + (toPercent(value, lower, upper) * (1 / 3));
+  }
+
+  return 66.6667 + (toPercent(value, upper, high) * (1 / 3));
+}
+
+function getValuation(current, median) {
+  if (!Number.isFinite(current) || !Number.isFinite(median)) {
+    return { label: 'Unavailable', tone: 'neutral' };
+  }
+
+  if (current < median * 0.9) {
+    return { label: 'Undervalued', tone: 'undervalued' };
+  }
+
+  if (current > median * 1.1) {
+    return { label: 'Overvalued', tone: 'overvalued' };
+  }
+
+  return { label: 'Fairly Valued', tone: 'fair' };
+}
+
 export default function PEBand({
   low,
   median,
@@ -27,75 +60,74 @@ export default function PEBand({
 }) {
   const domainMin = Math.min(low, current);
   const domainMax = Math.max(high, current);
-  const currentValue = clamp(current, domainMin, domainMax);
-  const medianValue = clamp(median, domainMin, domainMax);
-  const currentPercent = toPercent(currentValue, domainMin, domainMax);
-  const medianPercent = toPercent(medianValue, domainMin, domainMax);
-  const markersClose = Math.abs(currentPercent - medianPercent) < 10;
+  const medianPercent = 50;
+  const currentPercent = toBandPercent(current, domainMin, median, domainMax);
+  const [animatedPercent, setAnimatedPercent] = useState(0);
 
-  const renderBadge = (label, value, percent, variant, stacked) => (
-    <div
-      className={`pe-band-badge pe-band-badge-${variant}${stacked ? ' stacked' : ''}`}
-      style={{ left: `${percent}%` }}
-    >
-      {label} {formatNumber(value)}
-    </div>
-  );
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setAnimatedPercent(currentPercent);
+    }, 180);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [currentPercent]);
+
+  const valuation = useMemo(() => getValuation(current, median), [current, median]);
+  const undervaluedThresholdValue = median * 0.9;
+  const overvaluedThresholdValue = median * 1.1;
 
   return (
-    <div className="pe-band-card">
-      <div className="pe-band-header">
-        <h3>PE Band</h3>
-        <span>{currentDate}</span>
+    <div className="pe-band-card premium">
+      <div className="pe-band-header premium">
+        <div>
+          <h3>PE Band</h3>
+          <p className="pe-band-subtitle">
+            Premium valuation view across the current historical range
+          </p>
+        </div>
+        <div className={`pe-band-valuation pe-band-valuation-${valuation.tone}`}>
+          <span className="pe-band-valuation-label">{valuation.label}</span>
+          <span className="pe-band-valuation-date">{currentDate || 'Date unavailable'}</span>
+        </div>
       </div>
 
-      <div className="pe-band-widget">
-        {renderBadge(currentLabel, current, currentPercent, 'current', false)}
-        {renderBadge(medianLabel, median, medianPercent, 'median', markersClose)}
+      <div className="pe-band-widget premium">
+        <div
+          className="pe-band-track premium"
+          style={{
+            background: `linear-gradient(90deg,
+              #22c55e 0%,
+              #16a34a 33.3333%,
+              #eab308 33.3333%,
+              #f59e0b 66.6667%,
+              #ef4444 66.6667%,
+              #dc2626 100%)`
+          }}
+        >
+          <div
+            className="pe-band-marker pe-band-marker-median"
+            style={{ left: `${medianPercent}%` }}
+          >
+            <div className="pe-band-marker-line" />
+            <div className="pe-band-marker-chip">
+              {medianLabel} {formatNumber(median)}
+            </div>
+          </div>
 
-        <div className="pe-band-slider-wrap">
-          <Slider
-            range
-            min={domainMin}
-            max={domainMax}
-            value={[currentValue, medianValue].sort((a, b) => a - b)}
-            disabled
-            allowCross={false}
-            trackStyle={[{ background: 'transparent', height: 12 }]}
-            railStyle={{
-              height: 12,
-              borderRadius: 999,
-              background: 'linear-gradient(90deg, #2f9e44 0%, #2f9e44 33.33%, #f1c40f 33.33%, #f1c40f 66.66%, #d63336 66.66%, #d63336 100%)'
-            }}
-            handleStyle={[
-              {
-                width: 16,
-                height: 16,
-                marginTop: -2,
-                borderWidth: 3,
-                borderColor: '#111827',
-                backgroundColor: '#111827',
-                opacity: 1,
-                boxShadow: '0 0 0 4px rgba(17, 24, 39, 0.14)'
-              },
-              {
-                width: 16,
-                height: 16,
-                marginTop: -2,
-                borderWidth: 3,
-                borderColor: '#475569',
-                backgroundColor: '#475569',
-                opacity: 1,
-                boxShadow: '0 0 0 4px rgba(71, 85, 105, 0.12)'
-              }
-            ]}
-          />
+          <div
+            className={`pe-band-thumb pe-band-thumb-${valuation.tone}`}
+            style={{ left: `${animatedPercent}%` }}
+          >
+            <div className="pe-band-tooltip">
+              {currentLabel} {formatNumber(current)}
+            </div>
+          </div>
         </div>
 
-        <div className="pe-band-scale">
-          <span>Low {formatNumber(low)}</span>
-          <span>Median {formatNumber(median)}</span>
-          <span>High {formatNumber(high)}</span>
+        <div className="pe-band-scale premium">
+          <span>Undervalued &lt; {formatNumber(undervaluedThresholdValue)}</span>
+          <span>Fair {formatNumber(undervaluedThresholdValue)} - {formatNumber(overvaluedThresholdValue)}</span>
+          <span>Overvalued &gt; {formatNumber(overvaluedThresholdValue)}</span>
         </div>
       </div>
     </div>

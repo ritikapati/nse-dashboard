@@ -3,7 +3,7 @@ const axios = require('axios');
 const cors = require('cors');
 const cheerio = require('cheerio');
 const { calculateHistoricalPE } = require('./historical-pe');
-const { indexAnalysisData, getIndexByName, getIndexComparison } = require('./index-analysis-data');
+const { indexCatalog, getIndexByName } = require('./index-analysis-data');
 
 const app = express();
 app.use(cors());
@@ -53,6 +53,8 @@ let stocksCache = null;
 let niftyCache = null;
 let stocksLastFetch = 0;
 let niftyLastFetch = 0;
+let allIndicesCache = null;
+let allIndicesLastFetch = 0;
 const CACHE_DURATION = 300000; // 5 minutes cache
 
 function getCurrentPrice(priceInfo) {
@@ -73,6 +75,64 @@ function getCurrentPrice(priceInfo) {
   }
 
   return null;
+}
+
+function parseMarketNumber(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const normalized = String(value).replace(/,/g, '').replace(/%/g, '').trim();
+  if (!normalized || normalized === '-') {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function fetchIndexSnapshot(indexMeta) {
+  const now = Date.now();
+
+  if (!allIndicesCache || (now - allIndicesLastFetch) >= CACHE_DURATION) {
+    const response = await axios.get(`${NSE_BASE_URL}/allIndices`, {
+      headers: nseHeaders,
+      timeout: 15000
+    });
+
+    allIndicesCache = Array.isArray(response.data?.data) ? response.data.data : [];
+    allIndicesLastFetch = now;
+  }
+
+  const indexRow = allIndicesCache.find((item) => {
+    const candidates = [item.index, item.indexSymbol, item.identifier, item.symbol]
+      .map((value) => String(value || '').trim().toUpperCase())
+      .filter(Boolean);
+
+    return candidates.includes(indexMeta.nseIndexName.toUpperCase());
+  });
+
+  if (!indexRow) {
+    throw new Error(`Live index data not found for ${indexMeta.nseIndexName}`);
+  }
+
+  return {
+    name: indexMeta.name,
+    symbol: indexMeta.symbol,
+    description: indexMeta.description,
+    price: parseMarketNumber(indexRow.last ?? indexRow.lastPrice ?? indexRow.close),
+    change: parseMarketNumber(indexRow.variation ?? indexRow.change),
+    changePercent: parseMarketNumber(indexRow.percentChange ?? indexRow.pChange),
+    pe: parseMarketNumber(indexRow.pe),
+    pb: parseMarketNumber(indexRow.pb),
+    dy: parseMarketNumber(indexRow.dy),
+    asOf: new Date().toISOString(),
+    source: 'NSE'
+  };
 }
 
 function getScreenerUrls(symbol) {
@@ -665,15 +725,8 @@ app.get('/api/index/current', async (req, res) => {
       });
     }
 
-    res.json({
-      name: indexRecord.name,
-      symbol: indexRecord.symbol,
-      description: indexRecord.description,
-      pe: indexRecord.peSummary.currentPE,
-      pb: indexRecord.pb,
-      dy: indexRecord.dy,
-      peSummary: indexRecord.peSummary
-    });
+    const snapshot = await fetchIndexSnapshot(indexRecord);
+    res.json(snapshot);
   } catch (error) {
     console.error('Index current API Error:', error);
     res.status(500).json({
@@ -694,12 +747,11 @@ app.get('/api/index/history', async (req, res) => {
       });
     }
 
-    res.json({
+    res.status(501).json({
       name: indexRecord.name,
       symbol: indexRecord.symbol,
-      peSummary: indexRecord.peSummary,
-      years: indexRecord.years,
-      history: indexRecord.series
+      available: false,
+      message: 'Historical index PE data is not available from the current live source, so no synthetic history is returned.'
     });
   } catch (error) {
     console.error('Index history API Error:', error);
@@ -712,9 +764,32 @@ app.get('/api/index/history', async (req, res) => {
 
 app.get('/api/index/comparison', async (req, res) => {
   try {
+    const snapshots = await Promise.all(
+      indexCatalog.map(async (item) => {
+        try {
+          return await fetchIndexSnapshot(item);
+        } catch (error) {
+          console.error(`Index comparison fetch failed for ${item.symbol}:`, error.message);
+          return {
+            name: item.name,
+            symbol: item.symbol,
+            description: item.description,
+            price: null,
+            change: null,
+            changePercent: null,
+            pe: null,
+            pb: null,
+            dy: null,
+            asOf: null,
+            source: 'NSE'
+          };
+        }
+      })
+    );
+
     res.json({
       updatedAt: new Date().toISOString(),
-      indexes: getIndexComparison()
+      indexes: snapshots
     });
   } catch (error) {
     console.error('Index comparison API Error:', error);
@@ -728,7 +803,7 @@ app.get('/api/index/comparison', async (req, res) => {
 app.get('/api/index/list', async (req, res) => {
   try {
     res.json({
-      indexes: indexAnalysisData.map((item) => ({
+      indexes: indexCatalog.map((item) => ({
         name: item.name,
         symbol: item.symbol
       }))

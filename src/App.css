@@ -1,5 +1,5 @@
 .App {
-  text-align: center;
+  min-height: 100vh;
 }
 
 .App-logo {
@@ -26,6 +26,149 @@
 
 .App-link {
   color: #61dafb;
+}
+
+.landing-shell {
+  min-height: 100vh;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.22), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.18), transparent 30%),
+    linear-gradient(135deg, #f8fafc 0%, #eef2ff 48%, #ecfeff 100%);
+}
+
+.landing-backdrop {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(8px);
+  opacity: 0.7;
+}
+
+.landing-backdrop-left {
+  width: 240px;
+  height: 240px;
+  top: -60px;
+  left: -50px;
+  background: rgba(249, 115, 22, 0.12);
+}
+
+.landing-backdrop-right {
+  width: 300px;
+  height: 300px;
+  right: -80px;
+  bottom: -80px;
+  background: rgba(2, 132, 199, 0.12);
+}
+
+.landing-main {
+  position: relative;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 72px 24px;
+}
+
+.landing-copy {
+  max-width: 720px;
+  margin-bottom: 36px;
+}
+
+.landing-copy h1 {
+  margin: 16px 0 12px;
+  font-size: clamp(2.5rem, 5vw, 4.5rem);
+  line-height: 0.95;
+  letter-spacing: -0.04em;
+  color: #0f172a;
+  text-align: left;
+}
+
+.landing-copy p {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.7;
+  color: #334155;
+  max-width: 640px;
+  text-align: left;
+}
+
+.landing-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9a3412;
+  background: rgba(255, 237, 213, 0.9);
+  border: 1px solid rgba(251, 146, 60, 0.25);
+}
+
+.landing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.landing-card {
+  display: block;
+  text-decoration: none;
+  text-align: left;
+  padding: 28px;
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(14px);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.landing-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(37, 99, 235, 0.35);
+  box-shadow: 0 28px 54px rgba(15, 23, 42, 0.12);
+}
+
+.landing-card-eyebrow {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0369a1;
+  margin-bottom: 12px;
+}
+
+.landing-card h2 {
+  margin: 0 0 10px;
+  font-size: 1.9rem;
+  line-height: 1;
+  color: #0f172a;
+}
+
+.landing-card p {
+  margin: 0 0 18px;
+  font-size: 0.98rem;
+  line-height: 1.65;
+  color: #475569;
+}
+
+.landing-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+@media (max-width: 768px) {
+  .landing-main {
+    padding: 48px 20px;
+  }
+
+  .landing-copy h1 {
+    font-size: 2.8rem;
+  }
 }
 
 @keyframes App-logo-spin {

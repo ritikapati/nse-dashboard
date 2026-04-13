@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
-const { indexCatalog } = require('../index-analysis-data');
-const { syncIndexCatalog, upsertIndexValuation } = require('../index-valuation-store');
+const { indexCatalog } = require('../../backend/index-analysis-data');
+const { syncIndexCatalog, upsertIndexValuation } = require('../../backend/index-valuation-store');
 
 const csvDirectory = path.join(__dirname, '..', 'data', 'index-csv');
 
@@ -85,7 +85,7 @@ async function importCsv(filePath, fallbackIndexMeta) {
 
           await upsertIndexValuation(indexMeta.symbol, {
             date,
-            price: getValue(row, ['index value', 'close', 'closing index value', 'last']),
+            price: getValue(row, ['index value', 'close', 'closing index value', 'last', 'close index value']),
             pe: getValue(row, ['pe', 'p/e', 'price earnings']),
             pb: getValue(row, ['pb', 'p/b', 'price book']),
             dy: getValue(row, ['div yield', 'dividend yield', 'div yield%', 'dy']),
@@ -139,3 +139,5 @@ main().catch((error) => {
   console.error('CSV import failed:', error);
   process.exit(1);
 });
+
+

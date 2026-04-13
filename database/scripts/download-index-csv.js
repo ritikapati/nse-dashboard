@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer');
-const { indexCatalog } = require('../index-analysis-data');
+const { indexCatalog } = require('../../backend/index-analysis-data');
 
 const DOWNLOAD_DIR = path.resolve(__dirname, '../data/index-csv');
 const REPORT_URL = 'https://www.nseindia.com/reports-indices-yield';

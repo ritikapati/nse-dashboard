@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parser');
-const { indexCatalog } = require('../index-analysis-data');
+const { indexCatalog } = require('../../backend/index-analysis-data');
 
 const folderPath = path.resolve(__dirname, '../data/index-csv');
 

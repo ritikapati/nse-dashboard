@@ -1,6 +1,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const yahooFinance = require('yahoo-finance2').default;
+const { upsertStockFinancial, listStockFinancials } = require('./stock-financial-store');
 
 const NSE_BASE_URL = 'https://www.nseindia.com';
 const SYMBOL_HISTORY_START = '2000-01-01';
@@ -41,6 +42,18 @@ function createHeaders(extraHeaders = {}) {
     'Connection': 'keep-alive',
     ...extraHeaders
   };
+}
+
+function createNseApiHeaders(extraHeaders = {}) {
+  return createHeaders({
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    ...extraHeaders
+  });
 }
 
 function createYahooHeaders() {
@@ -125,13 +138,147 @@ function parsePeriodLabel(rawLabel) {
   return null;
 }
 
+function parseFinancialPeriodLabel(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) {
+    return null;
+  }
+
+  const match = value.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})$/i);
+  if (match) {
+    const monthIndex = monthMap[match[1].toLowerCase()];
+    const year = Number.parseInt(match[2], 10);
+    return formatDate(endOfMonth(year, monthIndex));
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : formatDate(parsed);
+}
+
+function pickFirstValue(record, candidates) {
+  for (const candidate of candidates) {
+    if (record[candidate] !== undefined && record[candidate] !== null && record[candidate] !== '') {
+      return record[candidate];
+    }
+  }
+
+  return null;
+}
+
+async function fetchNseQuoteFinancials(symbol) {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  const cookies = await ensureNseCookies();
+  const response = await axios.get(`${NSE_BASE_URL}/api/quote-equity`, {
+    headers: createNseApiHeaders({
+      Cookie: cookies,
+      Referer: `https://www.nseindia.com/get-quotes/equity?symbol=${normalizedSymbol}`
+    }),
+    params: { symbol: normalizedSymbol },
+    timeout: 20000,
+    validateStatus: (status) => status >= 200 && status < 300
+  });
+
+  return response.data || null;
+}
+
+function normalizeFinancialRows(rows) {
+  return rows
+    .map((row) => ({
+      date: parseFinancialPeriodLabel(pickFirstValue(row, ['quarter', 'period', 'date', 'filingDate', 'endDate'])),
+      revenue: parseNumber(pickFirstValue(row, ['totalIncome', 'revenue', 'sales', 'incomeFromOperations', 'totalRevenue'])),
+      pat: parseNumber(pickFirstValue(row, ['netProfit', 'profitAfterTax', 'pat', 'profitAfterTaxAfterMinorityInterest', 'profitAfterTaxBeforeMinorityInterest'])),
+      type: String(pickFirstValue(row, ['type', 'periodType']) || 'quarterly').toLowerCase().includes('year') ? 'yearly' : 'quarterly'
+    }))
+    .filter((row) => row.date && (Number.isFinite(row.revenue) || Number.isFinite(row.pat)));
+}
+
+async function fetchAndStoreStockFinancialsFromNSE(symbol) {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  if (!normalizedSymbol) {
+    return [];
+  }
+
+  const cookies = await ensureNseCookies();
+  let normalizedRows = [];
+
+  try {
+    const response = await axios.get(`${NSE_BASE_URL}/api/corporates-financial-results`, {
+      headers: createNseApiHeaders({
+        Cookie: cookies,
+        Referer: `https://www.nseindia.com/companies-listing/corporate-filings-financial-results?symbol=${normalizedSymbol}`
+      }),
+      params: {
+        symbol: normalizedSymbol,
+        index: 'equities'
+      },
+      timeout: 20000,
+      validateStatus: (status) => status >= 200 && status < 300
+    });
+
+    const rows = Array.isArray(response.data?.data)
+      ? response.data.data
+      : Array.isArray(response.data)
+        ? response.data
+        : [];
+
+    normalizedRows = normalizeFinancialRows(rows);
+  } catch (error) {
+    console.warn(`[Historical PE] Primary NSE financial results fetch failed for ${normalizedSymbol}: ${error.message}`);
+  }
+
+  if (!normalizedRows.length) {
+    try {
+      const quoteData = await fetchNseQuoteFinancials(normalizedSymbol);
+      const quoteRows = quoteData?.financials?.incomeStatement || quoteData?.financials?.results || [];
+      normalizedRows = normalizeFinancialRows(Array.isArray(quoteRows) ? quoteRows : []);
+    } catch (error) {
+      console.warn(`[Historical PE] NSE quote financials fallback failed for ${normalizedSymbol}: ${error.message}`);
+    }
+  }
+
+  for (const row of normalizedRows) {
+    await upsertStockFinancial(normalizedSymbol, {
+      date: row.date,
+      revenue: row.revenue,
+      pat: row.pat,
+      type: row.type,
+      source: 'NSE financials API'
+    });
+  }
+
+  return normalizedRows;
+}
+
+async function getQuarterlyStockFinancials(symbol) {
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+
+  let storedRows = await listStockFinancials(normalizedSymbol, 'quarterly');
+  if (!storedRows.length) {
+    try {
+      await fetchAndStoreStockFinancialsFromNSE(normalizedSymbol);
+      storedRows = await listStockFinancials(normalizedSymbol, 'quarterly');
+    } catch (error) {
+      console.warn(`[Historical PE] NSE financial results fetch failed for ${normalizedSymbol}: ${error.message}`);
+    }
+  }
+
+  return storedRows
+    .map((row) => ({
+      date: row.date,
+      revenue: Number.isFinite(row.revenue) ? Number.parseFloat(row.revenue.toFixed(2)) : null,
+      pat: Number.isFinite(row.pat) ? Number.parseFloat(row.pat.toFixed(2)) : null
+    }))
+    .filter((row) => row.date && (Number.isFinite(row.revenue) || Number.isFinite(row.pat)))
+    .sort((left, right) => left.date.localeCompare(right.date));
+}
+
 async function ensureNseCookies() {
   if (nseCookieHeader) {
     return nseCookieHeader;
   }
 
   const response = await axios.get(NSE_BASE_URL, {
-    headers: createHeaders({
+    headers: createNseApiHeaders({
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
     }),
     timeout: 15000
@@ -361,6 +508,53 @@ function extractSeriesFromTable($, table, acceptedLabels) {
   return extracted;
 }
 
+function extractMultipleSeriesFromTable($, table, seriesDefinitions) {
+  const rows = $(table).find('tr');
+  if (!rows.length) {
+    return {};
+  }
+
+  const headers = [];
+  rows.first().find('th, td').each((index, cell) => {
+    if (index === 0) {
+      return;
+    }
+
+    headers.push(parsePeriodLabel($(cell).text()));
+  });
+
+  const extracted = {};
+
+  rows.each((_, row) => {
+    const cells = $(row).find('th, td');
+    if (!cells.length) {
+      return;
+    }
+
+    const label = normalizeLabel(cells.first().text());
+    const definition = seriesDefinitions.find((item) => item.labels.includes(label));
+    if (!definition) {
+      return;
+    }
+
+    const records = [];
+    cells.slice(1).each((index, cell) => {
+      const date = headers[index];
+      const value = parseNumber($(cell).text());
+
+      if (!date || value === null) {
+        return;
+      }
+
+      records.push({ date, value });
+    });
+
+    extracted[definition.key] = records;
+  });
+
+  return extracted;
+}
+
 function getTableContextLabel($, table) {
   const section = $(table).closest('section');
   const headingText = normalizeLabel(
@@ -395,36 +589,45 @@ async function extractEPSHistory(symbol) {
   }
 
   const $ = cheerio.load(html);
-  const acceptedLabels = ['eps in rs', 'eps in rs.', 'eps'];
+  const seriesDefinitions = [
+    { key: 'eps', labels: ['eps in rs', 'eps in rs.', 'eps'] }
+  ];
 
   let quarterlyEPS = [];
   let yearlyEPS = [];
 
   $('table').each((_, table) => {
     const contextLabel = getTableContextLabel($, table);
-    const series = extractSeriesFromTable($, table, acceptedLabels);
+    const seriesMap = extractMultipleSeriesFromTable($, table, seriesDefinitions);
+    const hasSeries = Object.values(seriesMap).some((series) => Array.isArray(series) && series.length);
 
-    if (!series.length) {
+    if (!hasSeries) {
       return;
     }
 
-    if (quarterlyEPS.length === 0 && contextLabel.includes('quarter')) {
-      quarterlyEPS = series;
+    const isQuarterly = contextLabel.includes('quarter');
+    const isAnnual = contextLabel.includes('profit') || contextLabel.includes('loss') || contextLabel.includes('annual');
+
+    if (isQuarterly) {
+      if (!quarterlyEPS.length && seriesMap.eps?.length) {
+        quarterlyEPS = seriesMap.eps.map((record) => ({ date: record.date, eps: record.value }));
+      }
       return;
     }
 
-    if (yearlyEPS.length === 0 && (contextLabel.includes('profit') || contextLabel.includes('loss') || contextLabel.includes('annual'))) {
-      yearlyEPS = series;
+    if (isAnnual) {
+      if (!yearlyEPS.length && seriesMap.eps?.length) {
+        yearlyEPS = seriesMap.eps.map((record) => ({ date: record.date, eps: record.value }));
+      }
       return;
     }
 
-    if (quarterlyEPS.length === 0) {
-      quarterlyEPS = series;
-      return;
+    if (!quarterlyEPS.length && seriesMap.eps?.length) {
+      quarterlyEPS = seriesMap.eps.map((record) => ({ date: record.date, eps: record.value }));
     }
 
-    if (yearlyEPS.length === 0) {
-      yearlyEPS = series;
+    if (!yearlyEPS.length && seriesMap.eps?.length) {
+      yearlyEPS = seriesMap.eps.map((record) => ({ date: record.date, eps: record.value }));
     }
   });
 
@@ -517,6 +720,29 @@ function toMonthlySeries(records) {
   }
 
   return Array.from(byMonth.values()).sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function mapSeriesToLatestValue(records, series, targetKey) {
+  if (!records.length || !series.length) {
+    return records;
+  }
+
+  let seriesIndex = -1;
+
+  return records.map((record) => {
+    while (seriesIndex + 1 < series.length && series[seriesIndex + 1].date <= record.date) {
+      seriesIndex += 1;
+    }
+
+    if (seriesIndex < 0 || !Number.isFinite(series[seriesIndex].value)) {
+      return record;
+    }
+
+    return {
+      ...record,
+      [targetKey]: Number.parseFloat(series[seriesIndex].value.toFixed(2))
+    };
+  });
 }
 
 function buildYearMatrix(records) {
@@ -681,10 +907,15 @@ async function calculateHistoricalPE(symbol, options = {}) {
   const priceHistory = await fetchHistoricalPrices(normalizedSymbol, startDate, endDate);
   const prices = priceHistory.records;
   const { quarterlyEPS, yearlyEPS, screenerUrl } = await extractEPSHistory(normalizedSymbol);
+  const quarterlyFinancials = await getQuarterlyStockFinancials(normalizedSymbol);
+  const quarterlyRevenue = quarterlyFinancials.map((row) => ({ date: row.date, value: row.revenue })).filter((row) => Number.isFinite(row.value));
+  const quarterlyProfitAfterTax = quarterlyFinancials.map((row) => ({ date: row.date, value: row.pat })).filter((row) => Number.isFinite(row.value));
   const ttmTimeline = buildTTMTimeline(quarterlyEPS, yearlyEPS);
   const monthlySeries = toMonthlySeries(mapPricesToLatestEPS(prices, ttmTimeline));
+  const monthlySeriesWithRevenue = mapSeriesToLatestValue(monthlySeries, quarterlyRevenue, 'revenue');
+  const enrichedMonthlySeries = mapSeriesToLatestValue(monthlySeriesWithRevenue, quarterlyProfitAfterTax, 'profitAfterTax');
 
-  if (!monthlySeries.length) {
+  if (!enrichedMonthlySeries.length) {
     throw new Error(`No historical PE data could be calculated for ${normalizedSymbol}`);
   }
 
@@ -692,21 +923,24 @@ async function calculateHistoricalPE(symbol, options = {}) {
     symbol: normalizedSymbol,
     source: 'hybrid-calculated',
     methodology: 'historical-price-plus-latest-available-eps',
-    totalRecords: monthlySeries.length,
+    totalRecords: enrichedMonthlySeries.length,
     dateRange: {
-      from: monthlySeries[0].date,
-      to: monthlySeries[monthlySeries.length - 1].date
+      from: enrichedMonthlySeries[0].date,
+      to: enrichedMonthlySeries[enrichedMonthlySeries.length - 1].date
     },
-    data: monthlySeries,
-    years: buildYearMatrix(monthlySeries),
-    stats: buildStats(monthlySeries),
-    peSummary: buildPESummary(monthlySeries),
+    data: enrichedMonthlySeries,
+    years: buildYearMatrix(enrichedMonthlySeries),
+    stats: buildStats(enrichedMonthlySeries),
+    peSummary: buildPESummary(enrichedMonthlySeries),
     metadata: {
       priceSource: priceHistory.source,
       epsSource: quarterlyEPS.length >= 4 ? 'Screener quarterly EPS mapped as rolling TTM' : 'Screener yearly EPS fallback',
       screenerUrl,
+      financialsSource: quarterlyFinancials.length ? 'NSE financial results API' : 'No stored NSE financials available',
       priceRecordsFetched: prices.length,
       quarterlyEPSRecords: quarterlyEPS.length,
+      quarterlyRevenueRecords: quarterlyRevenue.length,
+      quarterlyProfitAfterTaxRecords: quarterlyProfitAfterTax.length,
       yearlyEPSRecords: yearlyEPS.length,
       ttmRecordsBuilt: ttmTimeline.length,
       outputFrequency: 'monthly',
@@ -731,3 +965,7 @@ module.exports = {
   buildTTMTimeline,
   calculateHistoricalPE
 };
+
+
+
+

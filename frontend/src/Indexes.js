@@ -7,6 +7,7 @@ import {
   Select
 } from '@mui/material';
 import HistoricalPEInsights from './components/HistoricalPEInsights';
+import { apiUrl } from './config/api';
 
 function formatValue(value, suffix = '') {
   if (!Number.isFinite(value)) {
@@ -16,15 +17,15 @@ function formatValue(value, suffix = '') {
   return `${value.toFixed(2)}${suffix}`;
 }
 
-function formatPrice(value) {
+function formatIndexPrice(value) {
   if (!Number.isFinite(value)) {
     return 'N/A';
   }
 
-  return `Rs ${value.toLocaleString('en-IN', {
+  return value.toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
-  })}`;
+  });
 }
 
 export default function Indexes() {
@@ -39,7 +40,7 @@ export default function Indexes() {
 
   useEffect(() => {
     const fetchIndexList = async () => {
-      const response = await fetch('http://localhost:4000/api/index/list');
+      const response = await fetch(apiUrl('/api/index/list'));
 
       if (!response.ok) {
         throw new Error(`Failed to fetch index list (${response.status})`);
@@ -53,7 +54,6 @@ export default function Indexes() {
     };
 
     fetchIndexList().catch((fetchError) => {
-      console.error('Index list fetch error:', fetchError);
       setError(fetchError.message);
     });
   }, [selectedSymbol]);
@@ -65,9 +65,9 @@ export default function Indexes() {
         setError(null);
 
         const [currentResponse, historyResponse, comparisonResponse] = await Promise.all([
-          fetch(`http://localhost:4000/api/index/current?name=${selectedSymbol}`),
-          fetch(`http://localhost:4000/api/index/history?name=${selectedSymbol}&limit=5000`),
-          fetch('http://localhost:4000/api/index/comparison')
+          fetch(apiUrl(`/api/index/current?name=${selectedSymbol}`)),
+          fetch(apiUrl(`/api/index/history?name=${selectedSymbol}&limit=5000`)),
+          fetch(apiUrl('/api/index/comparison'))
         ]);
 
         if (!currentResponse.ok) {
@@ -89,7 +89,6 @@ export default function Indexes() {
         setComparisonData(comparisonJson.indexes || []);
         setLoading(false);
       } catch (fetchError) {
-        console.error('Index dashboard fetch error:', fetchError);
         setError(fetchError.message);
         setLoading(false);
       }
@@ -131,7 +130,7 @@ export default function Indexes() {
 
   const renderSortLabel = (label, key) => {
     const isActive = sortConfig.key === key;
-    const arrow = !isActive ? '↕' : sortConfig.direction === 'asc' ? '↑' : '↓';
+    const arrow = !isActive ? '<>' : sortConfig.direction === 'asc' ? '^' : 'v';
     return `${label} ${arrow}`;
   };
 
@@ -139,12 +138,15 @@ export default function Indexes() {
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <div style={{ marginBottom: '16px' }}>
         <Link to="/" style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>
-          Back to modules
+          Back to home page
         </Link>
       </div>
 
       <div style={{ marginBottom: '30px' }}>
-        <h1 style={{ color: '#333', marginBottom: '20px' }}>Index Analysis Dashboard</h1>
+        <div style={{ color: '#64748b', fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>
+          {summary?.currentDate ? `Data as of ${summary.currentDate}` : 'Latest valuation snapshot'}
+        </div>
+        <h1 style={{ color: '#333', marginBottom: '20px' }}>Index Valuation Dashboard</h1>
 
         <div style={{ maxWidth: '320px', marginBottom: '8px' }}>
           <FormControl fullWidth size="small">
@@ -203,7 +205,7 @@ export default function Indexes() {
                 {currentMetrics.name}
               </div>
               <div style={{ fontSize: '1.2em', fontWeight: 600, color: '#cbd5e1', maxWidth: '420px' }}>
-                {formatPrice(currentMetrics.price)}
+                {formatIndexPrice(currentMetrics.price)}
               </div>
             </div>
 
@@ -254,6 +256,8 @@ export default function Indexes() {
           <HistoricalPEInsights
             summary={summary}
             records={historyData?.history || []}
+            entityLabel={currentMetrics.name}
+            chartSeriesKeys={['pe', 'price']}
             emptyMessage={summary?.message || historyData?.message || 'Historical index valuation data has not been imported yet.'}
           />
 
@@ -270,40 +274,22 @@ export default function Indexes() {
             }}>
               <thead>
                 <tr style={{ background: '#f5f5f5' }}>
-                  <th
-                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
-                    onClick={() => toggleSort('name')}
-                  >
+                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }} onClick={() => toggleSort('name')}>
                     {renderSortLabel('Index', 'name')}
                   </th>
-                  <th
-                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
-                    onClick={() => toggleSort('sector')}
-                  >
+                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }} onClick={() => toggleSort('sector')}>
                     {renderSortLabel('Sector', 'sector')}
                   </th>
-                  <th
-                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
-                    onClick={() => toggleSort('price')}
-                  >
+                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }} onClick={() => toggleSort('price')}>
                     {renderSortLabel('Price', 'price')}
                   </th>
-                  <th
-                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
-                    onClick={() => toggleSort('pe')}
-                  >
+                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }} onClick={() => toggleSort('pe')}>
                     {renderSortLabel('PE Ratio', 'pe')}
                   </th>
-                  <th
-                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
-                    onClick={() => toggleSort('pb')}
-                  >
+                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }} onClick={() => toggleSort('pb')}>
                     {renderSortLabel('PB Ratio', 'pb')}
                   </th>
-                  <th
-                    style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }}
-                    onClick={() => toggleSort('dy')}
-                  >
+                  <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left', cursor: 'pointer' }} onClick={() => toggleSort('dy')}>
                     {renderSortLabel('Div. Yield', 'dy')}
                   </th>
                 </tr>
@@ -313,7 +299,7 @@ export default function Indexes() {
                   <tr key={item.symbol} style={{ background: item.symbol === selectedSymbol ? '#eff6ff' : '#fff' }}>
                     <td style={{ padding: '12px', border: '1px solid #ddd', fontWeight: 600 }}>{item.name}</td>
                     <td style={{ padding: '12px', border: '1px solid #ddd' }}>{item.sector || 'Uncategorized'}</td>
-                    <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatPrice(item.price)}</td>
+                    <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatIndexPrice(item.price)}</td>
                     <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatValue(item.pe)}</td>
                     <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatValue(item.pb)}</td>
                     <td style={{ padding: '12px', border: '1px solid #ddd' }}>{formatValue(item.dy, '%')}</td>
@@ -327,3 +313,6 @@ export default function Indexes() {
     </div>
   );
 }
+
+
+

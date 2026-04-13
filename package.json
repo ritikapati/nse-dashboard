@@ -3,60 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
-    "@mui/material": "^7.3.9",
-    "alphavantage": "^2.5.0",
-    "axios": "^1.13.5",
-    "babel-runtime": "^6.26.0",
-    "cheerio": "^1.0.0-rc.12",
-    "cors": "^2.8.5",
-    "cra-template-pwa": "2.0.0",
-    "csv-parser": "^3.2.0",
-    "express": "^5.2.1",
-    "node-cron": "^4.2.1",
-    "nse-historical-data": "^2.0.1",
-    "puppeteer": "^24.40.0",
-    "rc-slider": "^11.1.9",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router-dom": "^7.13.1",
-    "react-scripts": "5.0.1",
-    "recharts": "^3.8.1",
-    "sqlite3": "^6.0.1",
-    "yahoo-finance2": "^2.13.3"
+    "dotenv": "^16.4.5"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "download:index-csv": "node scripts/download-index-csv.js",
-    "import:index-valuations": "node scripts/import-index-valuations.js",
-    "rename:index-csv": "node scripts/rename-index-files.js",
-    "update:index-valuations": "node scripts/update-index-valuations.js",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  },
-  "main": "index.js",
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": ""
+    "start": "npm --prefix frontend run start",
+    "start:frontend": "npm --prefix frontend run start",
+    "start:backend": "npm --prefix backend run start",
+    "build": "npm --prefix frontend run build",
+    "test": "npm --prefix frontend run test",
+    "install:all": "npm install && npm --prefix frontend install && npm --prefix backend install && npm --prefix database install",
+    "download:index-csv": "npm --prefix database run download:index-csv",
+    "import:index-valuations": "npm --prefix database run import:index-valuations",
+    "rename:index-csv": "npm --prefix database run rename:index-csv",
+    "update:index-valuations": "npm --prefix database run update:index-valuations",
+    "migrate:postgres": "npm --prefix database run migrate:sqlite-to-postgres"
+  }
 }

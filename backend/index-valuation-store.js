@@ -1,5 +1,5 @@
 const { indexCatalog } = require('./index-analysis-data');
-const { initDatabase, run, get, all } = require('./lib/database');
+const { initDatabase, run, get, all } = require('../database/lib/database');
 
 function toNumber(value) {
   if (value === null || value === undefined || value === '') {
@@ -56,7 +56,7 @@ function getTrendLabel(rows) {
   const sortedRows = rows
     .filter((item) => Number.isFinite(item.pe) && item.date)
     .slice()
-    .sort((left, right) => left.date.localeCompare(right.date));
+    .sort((left, right) => String(left.date).localeCompare(String(right.date)));
 
   if (sortedRows.length < 2) {
     return null;
@@ -110,18 +110,18 @@ function getTrendLabel(rows) {
 async function syncIndexCatalog() {
   await initDatabase();
 
-  await run(`ALTER TABLE indices ADD COLUMN sector TEXT`).catch(() => {});
+  await run(`ALTER TABLE indices ADD COLUMN IF NOT EXISTS sector TEXT`);
 
   for (const item of indexCatalog) {
     await run(`
       INSERT INTO indices (symbol, slug, name, nse_index_name, sector, description, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
       ON CONFLICT(symbol) DO UPDATE SET
-        slug = excluded.slug,
-        name = excluded.name,
-        nse_index_name = excluded.nse_index_name,
-        sector = excluded.sector,
-        description = excluded.description,
+        slug = EXCLUDED.slug,
+        name = EXCLUDED.name,
+        nse_index_name = EXCLUDED.nse_index_name,
+        sector = EXCLUDED.sector,
+        description = EXCLUDED.description,
         updated_at = CURRENT_TIMESTAMP
     `, [item.symbol, item.slug, item.name, item.nseIndexName, item.sector || null, item.description]);
   }
@@ -132,12 +132,12 @@ async function getIndexMasterByLookup(lookup) {
   const normalized = String(lookup || '').trim().toUpperCase();
 
   return get(`
-    SELECT id, symbol, slug, name, nse_index_name AS nseIndexName, sector, description
+    SELECT id, symbol, slug, name, nse_index_name AS "nseIndexName", sector, description
     FROM indices
-    WHERE UPPER(symbol) = ?
-      OR UPPER(slug) = ?
-      OR UPPER(name) = ?
-      OR UPPER(nse_index_name) = ?
+    WHERE UPPER(symbol) = $1
+      OR UPPER(slug) = $2
+      OR UPPER(name) = $3
+      OR UPPER(nse_index_name) = $4
     LIMIT 1
   `, [normalized, normalized, normalized, normalized]);
 }
@@ -150,13 +150,13 @@ async function listIndices() {
       i.symbol,
       i.slug,
       i.name,
-      i.nse_index_name AS nseIndexName,
+      i.nse_index_name AS "nseIndexName",
       i.sector,
       i.description,
-      COUNT(v.id) AS historyRecords,
-      SUM(CASE WHEN v.source = 'NSE CSV' THEN 1 ELSE 0 END) AS csvHistoryRecords,
-      MIN(v.date) AS firstHistoryDate,
-      MAX(v.date) AS lastHistoryDate
+      COUNT(v.id) AS "historyRecords",
+      SUM(CASE WHEN v.source = 'NSE CSV' THEN 1 ELSE 0 END) AS "csvHistoryRecords",
+      MIN(v.date)::text AS "firstHistoryDate",
+      MAX(v.date)::text AS "lastHistoryDate"
     FROM indices i
     JOIN index_valuations v
       ON v.index_id = i.id
@@ -181,15 +181,15 @@ async function upsertIndexValuation(indexLookup, payload) {
     INSERT INTO index_valuations (
       index_id, date, price, pe, pb, div_yield, change_amount, change_percent, source, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    VALUES ($1, $2::date, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
     ON CONFLICT(index_id, date) DO UPDATE SET
-      price = excluded.price,
-      pe = excluded.pe,
-      pb = excluded.pb,
-      div_yield = excluded.div_yield,
-      change_amount = COALESCE(excluded.change_amount, index_valuations.change_amount),
-      change_percent = COALESCE(excluded.change_percent, index_valuations.change_percent),
-      source = COALESCE(excluded.source, index_valuations.source),
+      price = COALESCE(EXCLUDED.price, index_valuations.price),
+      pe = COALESCE(EXCLUDED.pe, index_valuations.pe),
+      pb = COALESCE(EXCLUDED.pb, index_valuations.pb),
+      div_yield = COALESCE(EXCLUDED.div_yield, index_valuations.div_yield),
+      change_amount = COALESCE(EXCLUDED.change_amount, index_valuations.change_amount),
+      change_percent = COALESCE(EXCLUDED.change_percent, index_valuations.change_percent),
+      source = COALESCE(EXCLUDED.source, index_valuations.source),
       updated_at = CURRENT_TIMESTAMP
   `, [
     indexMaster.id,
@@ -212,18 +212,18 @@ async function getIndexHistory(indexLookup, limit = 260) {
 
   const rows = await all(`
     SELECT
-      date,
+      date::text AS date,
       price,
       pe,
       pb,
       div_yield AS dy,
       change_amount AS change,
-      change_percent AS changePercent,
+      change_percent AS "changePercent",
       source
     FROM index_valuations
-    WHERE index_id = ?
+    WHERE index_id = $1
     ORDER BY date DESC
-    LIMIT ?
+    LIMIT $2
   `, [indexMaster.id, limit]);
 
   return {
@@ -240,17 +240,17 @@ async function getLatestIndexValuation(indexLookup) {
 
   const latest = await get(`
     SELECT
-      date,
+      date::text AS date,
       price,
       pe,
       pb,
       div_yield AS dy,
       change_amount AS change,
-      change_percent AS changePercent,
+      change_percent AS "changePercent",
       source,
-      updated_at AS updatedAt
+      updated_at AS "updatedAt"
     FROM index_valuations
-    WHERE index_id = ?
+    WHERE index_id = $1
     ORDER BY date DESC
     LIMIT 1
   `, [indexMaster.id]);
@@ -265,9 +265,9 @@ async function getIndexSummary(indexLookup) {
   }
 
   const rows = await all(`
-    SELECT date, pe, pb, div_yield AS dy
+    SELECT date::text AS date, pe, pb, div_yield AS dy
     FROM index_valuations
-    WHERE index_id = ?
+    WHERE index_id = $1
       AND pe IS NOT NULL
       AND pe > 0
       AND pe < 150
@@ -318,13 +318,13 @@ async function getComparisonSnapshot() {
       i.name,
       i.sector,
       i.description,
-      v.date,
+      v.date::text AS date,
       v.price,
       v.pe,
       v.pb,
       v.div_yield AS dy,
       v.change_amount AS change,
-      v.change_percent AS changePercent,
+      v.change_percent AS "changePercent",
       v.source
     FROM indices i
     JOIN index_valuations v

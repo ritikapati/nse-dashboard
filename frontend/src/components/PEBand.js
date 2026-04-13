@@ -54,9 +54,8 @@ export default function PEBand({
   median,
   high,
   current,
-  currentDate,
-  currentLabel = 'Current',
-  medianLabel = 'Median'
+  currentLabel = 'Current PE',
+  medianLabel = 'Median Range'
 }) {
   const domainMin = Math.min(low, current);
   const domainMax = Math.max(high, current);
@@ -73,8 +72,8 @@ export default function PEBand({
   }, [currentPercent]);
 
   const valuation = useMemo(() => getValuation(current, median), [current, median]);
-  const undervaluedThresholdValue = median * 0.9;
-  const overvaluedThresholdValue = median * 1.1;
+  const lowRangeUpper = median * 0.9;
+  const highRangeLower = median * 1.1;
 
   return (
     <div className="pe-band-card premium">
@@ -82,12 +81,8 @@ export default function PEBand({
         <div>
           <h3>PE Band</h3>
           <p className="pe-band-subtitle">
-            Premium valuation view across the current historical range
+            Current PE positioned within the historical valuation range
           </p>
-        </div>
-        <div className={`pe-band-valuation pe-band-valuation-${valuation.tone}`}>
-          <span className="pe-band-valuation-label">{valuation.label}</span>
-          <span className="pe-band-valuation-date">{currentDate || 'Date unavailable'}</span>
         </div>
       </div>
 
@@ -125,9 +120,9 @@ export default function PEBand({
         </div>
 
         <div className="pe-band-scale premium">
-          <span>Undervalued &lt; {formatNumber(undervaluedThresholdValue)}</span>
-          <span>Fair {formatNumber(undervaluedThresholdValue)} - {formatNumber(overvaluedThresholdValue)}</span>
-          <span>Overvalued &gt; {formatNumber(overvaluedThresholdValue)}</span>
+          <span>Low Range: {formatNumber(low)} - {formatNumber(lowRangeUpper)}</span>
+          <span>Median Range: {formatNumber(lowRangeUpper)} - {formatNumber(highRangeLower)}</span>
+          <span>High Range: {formatNumber(highRangeLower)} - {formatNumber(high)}</span>
         </div>
       </div>
     </div>

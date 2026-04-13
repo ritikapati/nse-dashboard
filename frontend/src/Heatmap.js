@@ -1,6 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HistoricalPEInsights from './components/HistoricalPEInsights';
+import { apiUrl } from './config/api';
+
+function formatStockPrice(value) {
+  if (!Number.isFinite(value)) {
+    return 'N/A';
+  }
+
+  return `${value.toFixed(2)} INR`;
+}
 
 const Heatmap = () => {
   const [heatmapData, setHeatmapData] = useState(null);
@@ -21,10 +30,9 @@ const Heatmap = () => {
       try {
         setLoading(true);
         setError(null);
-        console.log(`Fetching heatmap data for ${period} with limit=${heatmapLimit} and batchSize=${heatmapBatchSize}...`);
 
         const response = await fetch(
-          `http://localhost:4000/api/nifty50-heatmap/${period}?limit=${heatmapLimit}&batchSize=${heatmapBatchSize}`
+          apiUrl(`/api/nifty50-heatmap/${period}?limit=${heatmapLimit}&batchSize=${heatmapBatchSize}`)
         );
 
         if (!response.ok) {
@@ -32,7 +40,6 @@ const Heatmap = () => {
         }
 
         const data = await response.json();
-        console.log('Heatmap data received:', data);
         setHeatmapData(data);
         if (!selectedStock && data?.stocks?.length) {
           fetchStockMetrics(data.stocks[0].symbol);
@@ -40,7 +47,6 @@ const Heatmap = () => {
         }
         setLoading(false);
       } catch (err) {
-        console.error('Heatmap fetch error:', err);
         setError(`Failed to fetch heatmap data: ${err.message}`);
         setLoading(false);
       }
@@ -51,18 +57,15 @@ const Heatmap = () => {
 
   const fetchStockMetrics = (symbol) => {
     setMetricsLoading(true);
-    console.log(`Fetching metrics for ${symbol}...`);
 
-    fetch(`http://localhost:4000/api/stock-metrics/${symbol}`)
+    fetch(apiUrl(`/api/stock-metrics/${symbol}`))
       .then((res) => res.json())
       .then((data) => {
-        console.log('Stock metrics received:', data);
         setStockMetrics(data);
         setSelectedStock(symbol);
         setMetricsLoading(false);
       })
-      .catch((err) => {
-        console.error('Stock Metrics API error:', err);
+      .catch(() => {
         setMetricsLoading(false);
       });
   };
@@ -71,9 +74,8 @@ const Heatmap = () => {
     setHistoricalLoading(true);
     setHistoricalPE(null);
     setHistoricalError(null);
-    console.log(`Fetching historical PE for ${symbol}...`);
 
-    fetch(`http://localhost:4000/api/historical-pe/${symbol}`)
+    fetch(apiUrl(`/api/historical-pe/${symbol}`))
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) {
@@ -82,12 +84,10 @@ const Heatmap = () => {
         return data;
       })
       .then((data) => {
-        console.log('Historical PE data received:', data);
         setHistoricalPE(data);
         setHistoricalLoading(false);
       })
       .catch((err) => {
-        console.error('Historical PE API error:', err);
         setHistoricalPE(null);
         setHistoricalError(err.message);
         setHistoricalLoading(false);
@@ -99,16 +99,25 @@ const Heatmap = () => {
     fetchHistoricalPE(symbol);
   };
 
+  const asOfDate = historicalPE?.peSummary?.currentDate || null;
+  const selectedStockLabel = useMemo(() => {
+    const match = heatmapData?.stocks?.find((stock) => stock.symbol === selectedStock);
+    return match?.name || selectedStock || 'Stock';
+  }, [heatmapData, selectedStock]);
+
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
       <div style={{ marginBottom: '16px' }}>
         <Link to="/" style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}>
-          Back to modules
+          Back to home page
         </Link>
       </div>
 
       <div style={{ marginBottom: '30px' }}>
-        <h1 style={{ color: '#333', marginBottom: '20px' }}>Stock Analysis Dashboard</h1>
+        <div style={{ color: '#64748b', fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>
+          {asOfDate ? `Data as of ${asOfDate}` : 'Live market view'}
+        </div>
+        <h1 style={{ color: '#333', marginBottom: '20px' }}>Stock Valuation Dashboard</h1>
 
         {heatmapData && (
           <div style={{ marginBottom: '20px' }}>
@@ -132,7 +141,7 @@ const Heatmap = () => {
               <option value="">-- Choose a stock --</option>
               {heatmapData.stocks && heatmapData.stocks.map((stock) => (
                 <option key={stock.symbol} value={stock.symbol}>
-                  {stock.symbol} - Rs{stock.price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  {stock.name || stock.symbol}
                 </option>
               ))}
             </select>
@@ -173,24 +182,24 @@ const Heatmap = () => {
         }}>
           <div style={{ flex: 1.5, padding: '18px 24px', borderRight: '1px solid #2a2d3a' }}>
             <div style={{ fontSize: '0.72em', color: '#8b8fa8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px' }}>Stock</div>
-            <div style={{ fontSize: '1.8em', fontWeight: 700, color: '#fff', marginBottom: '8px' }}>{stockMetrics.symbol}</div>
-            <div style={{ fontSize: '1.2em', color: '#e6b800', fontWeight: 600 }}>Rs{stockMetrics.price?.toFixed(2)}</div>
+            <div style={{ fontSize: '1.8em', fontWeight: 700, color: '#fff', marginBottom: '8px' }}>{selectedStockLabel}</div>
+            <div style={{ fontSize: '1.2em', color: '#e6b800', fontWeight: 600 }}>{formatStockPrice(stockMetrics.price)}</div>
           </div>
 
           <div style={{ flex: 1, padding: '18px 24px', borderRight: '1px solid #2a2d3a' }}>
             <div style={{ fontSize: '0.72em', color: '#8b8fa8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px' }}>PE Ratio</div>
-            <div style={{ fontSize: '2em', fontWeight: 700, color: '#e6b800' }}>{stockMetrics.pe ? stockMetrics.pe.toFixed(2) : '—'}</div>
+            <div style={{ fontSize: '2em', fontWeight: 700, color: '#e6b800' }}>{stockMetrics.pe ? stockMetrics.pe.toFixed(2) : '-'}</div>
           </div>
 
           <div style={{ flex: 1, padding: '18px 24px', borderRight: '1px solid #2a2d3a' }}>
             <div style={{ fontSize: '0.72em', color: '#8b8fa8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px' }}>PB Ratio</div>
-            <div style={{ fontSize: '2em', fontWeight: 700, color: '#fd7e14' }}>{stockMetrics.pb ? stockMetrics.pb.toFixed(2) : '—'}</div>
+            <div style={{ fontSize: '2em', fontWeight: 700, color: '#fd7e14' }}>{stockMetrics.pb ? stockMetrics.pb.toFixed(2) : '-'}</div>
           </div>
 
           <div style={{ flex: 1, padding: '18px 24px', borderRight: '1px solid #2a2d3a' }}>
             <div style={{ fontSize: '0.72em', color: '#8b8fa8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px' }}>Div. Yield</div>
             <div style={{ fontSize: '2em', fontWeight: 700, color: '#e05c5c' }}>
-              {stockMetrics.dy != null ? `${stockMetrics.dy.toFixed(2)}%` : '—'}
+              {stockMetrics.dy != null ? `${stockMetrics.dy.toFixed(2)}%` : '-'}
             </div>
           </div>
 
@@ -201,7 +210,7 @@ const Heatmap = () => {
               fontWeight: 700,
               color: Number.isFinite(stockMetrics.change) && stockMetrics.change >= 0 ? '#2f9e44' : '#d63336'
             }}>
-              {Number.isFinite(stockMetrics.change) ? stockMetrics.change.toFixed(2) : '—'}
+              {Number.isFinite(stockMetrics.change) ? stockMetrics.change.toFixed(2) : '-'}
             </div>
             <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '6px' }}>
               {Number.isFinite(stockMetrics.changePercent) ? `${stockMetrics.changePercent >= 0 ? '+' : ''}${stockMetrics.changePercent.toFixed(2)}%` : 'N/A'}
@@ -221,6 +230,8 @@ const Heatmap = () => {
           <HistoricalPEInsights
             summary={historicalPE.peSummary}
             records={historicalPE.data || []}
+            entityLabel={selectedStockLabel}
+            chartSeriesKeys={['pe', 'price', 'ttmEPS']}
             emptyMessage="No historical PE data available from live sources for this stock"
           />
         ) : (
@@ -238,3 +249,4 @@ const Heatmap = () => {
 };
 
 export default Heatmap;
+

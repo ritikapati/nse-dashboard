@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   CartesianGrid,
   Legend,
@@ -11,6 +11,23 @@ import {
 } from 'recharts';
 import PEBand from './PEBand';
 import '../HistoricalPEChart.css';
+
+const CHART_SERIES = [
+  { key: 'pe', label: 'PE', color: '#0f766e' },
+  { key: 'price', label: 'Price', color: '#2563eb' },
+  { key: 'ttmEPS', label: 'EPS', color: '#7c3aed' },
+  { key: 'revenue', label: 'Revenue', color: '#ea580c' },
+  { key: 'profitAfterTax', label: 'Profit After Tax', color: '#dc2626' }
+];
+
+const RANGE_OPTIONS = [
+  { key: '1M', label: '1 Month', months: 1 },
+  { key: '6M', label: '6 Months', months: 6 },
+  { key: '1Y', label: '1 Year', months: 12 },
+  { key: '5Y', label: '5 Years', months: 60 },
+  { key: '10Y', label: '10 Years', months: 120 },
+  { key: 'ALL', label: 'All', months: null }
+];
 
 function formatMetricValue(value, prefix = '', suffix = '') {
   if (!Number.isFinite(value)) {
@@ -32,22 +49,24 @@ function normalizeValuation(value) {
   return String(value || '').trim().toUpperCase().replace(/\s+/g, '_');
 }
 
-function getMarketMoodMessage(summary) {
+function getMarketMoodMessage(summary, entityLabel) {
+  const label = entityLabel || 'Market';
+
   if (!summary || !Number.isFinite(summary.diffFromMedian)) {
-    return 'Market is near its 5Y median valuation';
+    return `${label} is near its 5Y median valuation`;
   }
 
   const lookbackYears = summary.lookbackYears || 5;
 
   if (summary.diffFromMedian > 5) {
-    return `Market is trading above its ${lookbackYears}Y median valuation`;
+    return `${label} is trading above its ${lookbackYears}Y median valuation`;
   }
 
   if (summary.diffFromMedian < -5) {
-    return `Market is trading below its ${lookbackYears}Y median valuation`;
+    return `${label} is trading below its ${lookbackYears}Y median valuation`;
   }
 
-  return `Market is near its ${lookbackYears}Y median valuation`;
+  return `${label} is near its ${lookbackYears}Y median valuation`;
 }
 
 function getPECellColors(pe, summary) {
@@ -125,10 +144,18 @@ function buildRecordTooltip(record, monthDate, value) {
     lines.push(`Price: ${record.price.toFixed(2)}`);
   }
 
+  if (Number.isFinite(record.revenue)) {
+    lines.push(`Revenue: ${record.revenue.toFixed(2)}`);
+  }
+
+  if (Number.isFinite(record.profitAfterTax)) {
+    lines.push(`PAT: ${record.profitAfterTax.toFixed(2)}`);
+  }
+
   return lines.join('\n');
 }
 
-function buildSummaryCards(summary) {
+function buildSummaryCards(summary, entityLabel) {
   if (!summary) {
     return [];
   }
@@ -139,15 +166,13 @@ function buildSummaryCards(summary) {
     {
       label: 'Current PE',
       value: formatMetricValue(summary.currentPE),
-      helper: summary.currentDate ? `As of ${summary.currentDate}` : 'Latest cleaned value',
+      helper: 'Latest cleaned value',
       tone: '#172b4d'
     },
     {
       label: `Median PE (${lookbackYears}Y)`,
       value: formatMetricValue(summary.medianPE),
-      helper: Number.isFinite(summary.diffFromMedian)
-        ? `${formatPercentDiff(summary.diffFromMedian)} vs median`
-        : `${summary.lookbackRecords || summary.cleanedRecords || 0} records`,
+      helper: '50th percentile band',
       tone: '#172b4d'
     },
     {
@@ -181,21 +206,11 @@ function buildSummaryCards(summary) {
     }
   ];
 
-  if (summary.dataQuality || Number.isFinite(summary.coveragePct) || Number.isFinite(summary.cleanedRecords)) {
+  if (summary.dataQuality || Number.isFinite(summary.coveragePct) || Number.isFinite(summary.cleanedRecords) || Number.isFinite(summary.lookbackRecords)) {
     cards.push({
       label: 'Data Quality',
       value: summary.dataQuality || 'N/A',
-      helper: `${summary.cleanedRecords || 0} valid points, ${Number.isFinite(summary.coveragePct) ? summary.coveragePct.toFixed(0) : '0'}% coverage`,
-      tone: '#172b4d',
-      valueStyle: { fontSize: '20px' }
-    });
-  }
-
-  if (summary.fairPrice != null) {
-    cards.push({
-      label: 'Fair Price',
-      value: formatMetricValue(summary.fairPrice, 'Rs '),
-      helper: 'Median PE x latest TTM EPS',
+      helper: `${summary.cleanedRecords || summary.lookbackRecords || 0} data points${Number.isFinite(summary.coveragePct) ? `, ${summary.coveragePct.toFixed(0)}% coverage` : ''}`,
       tone: '#172b4d',
       valueStyle: { fontSize: '20px' }
     });
@@ -214,7 +229,7 @@ function buildSummaryCards(summary) {
   if (Number.isFinite(summary.diffFromMedian)) {
     cards.push({
       label: 'Market Mood',
-      value: getMarketMoodMessage(summary),
+      value: getMarketMoodMessage(summary, entityLabel),
       helper: `Based on current PE versus the ${lookbackYears}Y median`,
       tone: '#172b4d',
       valueStyle: {
@@ -227,23 +242,69 @@ function buildSummaryCards(summary) {
   return cards;
 }
 
+function filterByRange(records, rangeKey) {
+  if (!records.length || rangeKey === 'ALL') {
+    return records;
+  }
+
+  const selectedRange = RANGE_OPTIONS.find((option) => option.key === rangeKey);
+  if (!selectedRange?.months) {
+    return records;
+  }
+
+  const latestDate = new Date(records[records.length - 1].date);
+  if (Number.isNaN(latestDate.getTime())) {
+    return records;
+  }
+
+  const cutoff = new Date(latestDate);
+  cutoff.setMonth(cutoff.getMonth() - selectedRange.months);
+
+  return records.filter((record) => {
+    const recordDate = new Date(record.date);
+    return !Number.isNaN(recordDate.getTime()) && recordDate >= cutoff;
+  });
+}
+
 export default function HistoricalPEInsights({
   summary,
   records = [],
   emptyMessage = 'No historical PE data available.',
   showBand = true,
   showChart = true,
-  sectionTitle = 'Historical PE Values'
+  sectionTitle = 'Historical PE Values',
+  entityLabel = 'Market',
+  chartSeriesKeys = ['pe', 'price', 'ttmEPS', 'revenue', 'profitAfterTax']
 }) {
+  const supportedSeries = useMemo(
+    () => CHART_SERIES.filter((series) => chartSeriesKeys.includes(series.key)),
+    [chartSeriesKeys]
+  );
+  const [selectedRange, setSelectedRange] = useState('5Y');
+  const [visibleSeries, setVisibleSeries] = useState(() => ({
+    pe: chartSeriesKeys.includes('pe'),
+    price: chartSeriesKeys.includes('price'),
+    ttmEPS: false,
+    revenue: false,
+    profitAfterTax: false
+  }));
+
   const chartData = useMemo(
     () => (records || []).filter((point) => Number.isFinite(point?.pe)),
     [records]
   );
 
+  const filteredChartData = useMemo(
+    () => filterByRange(chartData, selectedRange),
+    [chartData, selectedRange]
+  );
+
   const heatmapYears = useMemo(() => buildHeatmapYears(chartData), [chartData]);
-  const cards = useMemo(() => buildSummaryCards(summary), [summary]);
-  const historyStartDate = chartData[0]?.date || null;
-  const historyEndDate = chartData[chartData.length - 1]?.date || null;
+  const cards = useMemo(() => buildSummaryCards(summary, entityLabel), [summary, entityLabel]);
+  const availableSeries = useMemo(
+    () => Object.fromEntries(supportedSeries.map((series) => [series.key, chartData.some((point) => Number.isFinite(point?.[series.key]))])),
+    [chartData, supportedSeries]
+  );
 
   if (!chartData.length) {
     return (
@@ -260,6 +321,9 @@ export default function HistoricalPEInsights({
       </div>
     );
   }
+
+  const activeSeries = supportedSeries.filter((series) => visibleSeries[series.key] && availableSeries[series.key]);
+  const secondarySeries = activeSeries.filter((series) => series.key !== 'pe');
 
   return (
     <>
@@ -306,7 +370,6 @@ export default function HistoricalPEInsights({
             median={summary.medianPE}
             high={summary.highestPE}
             current={summary.currentPE}
-            currentDate={summary.currentDate}
           />
         </div>
       ) : null}
@@ -323,18 +386,87 @@ export default function HistoricalPEInsights({
           <div style={{ marginBottom: '10px', color: '#475569', fontSize: '13px', fontWeight: 600 }}>
             Historical PE Chart
           </div>
-          <div style={{ marginBottom: '12px', color: '#64748b', fontSize: '12px' }}>
-            Showing {chartData.length} PE records from {historyStartDate || 'N/A'} to {historyEndDate || 'N/A'}
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '14px' }}>
+            {RANGE_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setSelectedRange(option.key)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '999px',
+                  border: selectedRange === option.key ? '1px solid #0f766e' : '1px solid #cbd5e1',
+                  background: selectedRange === option.key ? '#ecfdf5' : '#fff',
+                  color: selectedRange === option.key ? '#0f766e' : '#475569',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
-          <div style={{ width: '100%', height: '320px' }}>
+
+          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginBottom: '16px' }}>
+            {supportedSeries.map((series) => (
+              <label key={series.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: availableSeries[series.key] ? '#334155' : '#94a3b8', fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={visibleSeries[series.key]}
+                  disabled={!availableSeries[series.key]}
+                  onChange={() => setVisibleSeries((current) => ({
+                    ...current,
+                    [series.key]: !current[series.key]
+                  }))}
+                />
+                <span style={{ color: availableSeries[series.key] ? series.color : '#94a3b8' }}>
+                  {series.label}{availableSeries[series.key] ? '' : ' (No data)'}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          {!activeSeries.length ? (
+            <div style={{ marginBottom: '12px', color: '#b45309', fontSize: '13px', fontWeight: 600 }}>
+              Select at least one available series to view the chart.
+            </div>
+          ) : null}
+
+          <div style={{ width: '100%', height: '360px' }}>
             <ResponsiveContainer>
-              <LineChart data={chartData}>
+              <LineChart data={filteredChartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="date" tick={{ fontSize: 12 }} minTickGap={20} />
-                <YAxis tick={{ fontSize: 12 }} />
+                <YAxis yAxisId="pe" tick={{ fontSize: 12 }} domain={['auto', 'auto']} />
+                {secondarySeries.map((series, index) => (
+                  <YAxis
+                    key={series.key}
+                    yAxisId={series.key}
+                    orientation={index === 0 ? 'right' : 'left'}
+                    hide={index !== 0}
+                    tick={{ fontSize: 12 }}
+                    domain={['auto', 'auto']}
+                    allowDataOverflow={false}
+                  />
+                ))}
                 <Tooltip />
                 <Legend />
-                <Line type="monotone" dataKey="pe" stroke="#0f766e" strokeWidth={3} dot={false} name="PE" />
+                {activeSeries.map((series) => (
+                  <Line
+                    key={series.key}
+                    type="monotone"
+                    dataKey={series.key}
+                    yAxisId={series.key === 'pe' ? 'pe' : series.key}
+                    stroke={series.color}
+                    strokeWidth={series.key === 'pe' ? 3 : 2}
+                    dot={false}
+                    connectNulls
+                    name={series.label}
+                    isAnimationActive={false}
+                  />
+                ))}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -343,7 +475,7 @@ export default function HistoricalPEInsights({
 
       <div style={{ marginBottom: '30px', overflowX: 'auto' }}>
         <div style={{ marginBottom: '10px', color: '#475569', fontSize: '13px', fontWeight: 600 }}>
-          Historical PE Heatmap (Full History)
+          PE Heatmap
         </div>
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '12px', fontSize: '12px', color: '#64748b' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}><span style={{ width: '10px', height: '10px', borderRadius: '999px', background: '#2f9e44', display: 'inline-block' }} /> Undervalued (below median -20%)</span>
@@ -389,7 +521,7 @@ export default function HistoricalPEInsights({
                         fontWeight: 'bold'
                       }}
                     >
-                      {hasValue ? numValue.toFixed(2) : '—'}
+                      {hasValue ? numValue.toFixed(2) : '-'}
                     </td>
                   );
                 })}
@@ -407,3 +539,6 @@ export default function HistoricalPEInsights({
     </>
   );
 }
+
+
+

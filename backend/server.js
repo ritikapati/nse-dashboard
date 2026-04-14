@@ -4,23 +4,24 @@ const axios = require('axios');
 const cors = require('cors');
 const cheerio = require('cheerio');
 const https = require('https');
-const { calculateHistoricalPE } = require('./historical-pe');
+const stockRoutes = require('./api/stock.routes');
+const indexRoutes = require('./api/index.routes');
+const aiRoutes = require('./api/ai.routes');
+const indexService = require('./services/index.service');
 const { indexCatalog, getIndexByName } = require('./index-analysis-data');
 const {
   syncIndexCatalog,
-  listIndices,
   upsertIndexValuation,
-  getLatestIndexValuation,
-  getIndexHistory,
-  getIndexSummary,
-  getComparisonSnapshot
 } = require('./index-valuation-store');
 
 const app = express();
 app.use(cors());
+app.use('/api', stockRoutes);
+app.use('/api', indexRoutes);
+app.use('/api', aiRoutes);
 
 syncIndexCatalog()
-  .then(() => refreshAllIndexValuations().catch((error) => {
+  .then(() => indexService.refreshAllIndexValuations().catch((error) => {
     console.error('Initial index valuation refresh failed:', error.message);
   }))
   .catch((error) => {
@@ -28,7 +29,7 @@ syncIndexCatalog()
   });
 
 cron.schedule('0 18 * * *', () => {
-  refreshAllIndexValuations().catch((error) => {
+  indexService.refreshAllIndexValuations().catch((error) => {
     console.error('Scheduled index valuation refresh failed:', error.message);
   });
 }, {
@@ -490,165 +491,6 @@ app.get('/api/nifty50-pe', async (req, res) => {
   }
 });
 
-// Fetch stock metrics (PE, PB, DY) from Screener
-async function fetchStockMetrics(symbol) {
-  try {
-    console.log(`Fetching stock metrics for ${symbol}...`);
-    
-    // First, get real-time price from NSE API
-    let price = null;
-    let change = null;
-    let changePercent = null;
-    try {
-      const nseData = await fetchNSEQuote(symbol);
-      if (nseData && nseData.priceInfo) {
-        price = getCurrentPrice(nseData.priceInfo);
-        change = parseMarketNumber(nseData.priceInfo.change);
-        changePercent = parseMarketNumber(nseData.priceInfo.pChange);
-        console.log(`Got NSE price for ${symbol}: ${price}`);
-      }
-    } catch (error) {
-      console.log(`Could not fetch NSE price for ${symbol}`, error.message);
-    }
-    
-    let pe = null;
-    let pb = null;
-    let dy = null;
-    let latestTTMEPS = null;
-    let screenerStockPE = null;
-    
-    // Try to get metrics from Screener
-    try {
-      let html = null;
-
-      for (const url of getScreenerUrls(symbol)) {
-        try {
-          const response = await axios.get(url, withTlsFallback({
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            timeout: 10000
-          }));
-
-          html = response.data;
-          console.log(`Using Screener URL for ${symbol}: ${url}`);
-          break;
-        } catch (error) {
-          console.log(`Could not fetch Screener URL for ${symbol}: ${url} -> ${error.message}`);
-        }
-      }
-
-      if (!html) {
-        throw new Error(`Unable to fetch Screener page for ${symbol}`);
-      }
-
-      const $ = cheerio.load(html);
-
-      const topRatios = {};
-      $('#top-ratios li').each((_, item) => {
-        const name = $(item).find('.name').text().trim().replace(/\s+/g, ' ');
-        const valueText = $(item).find('.value').text().trim().replace(/\s+/g, ' ');
-
-        if (name) {
-          topRatios[name] = valueText;
-        }
-      });
-
-      const extractNumeric = (valueText) => {
-        if (!valueText) {
-          return null;
-        }
-
-        const match = String(valueText).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
-        return match ? parseFloat(match[0]) : null;
-      };
-
-      screenerStockPE = extractNumeric(topRatios['Stock P/E']);
-      const bookValue = extractNumeric(topRatios['Book Value']);
-      dy = extractNumeric(topRatios['Dividend Yield']);
-      pb = (price && bookValue) ? parseFloat((price / bookValue).toFixed(2)) : null;
-
-      console.log(`Scraped exact top ratios from Screener: StockPE=${screenerStockPE}, BookValue=${bookValue}, PB=${pb}, DY=${dy}`);
-    } catch (error) {
-      console.log(`Could not fetch from Screener for ${symbol}:`, error.message);
-    }
-
-    try {
-      const historicalPE = await calculateHistoricalPE(symbol);
-      const latestRecord = historicalPE.data?.[historicalPE.data.length - 1] || null;
-
-      if (latestRecord?.ttmEPS) {
-        latestTTMEPS = latestRecord.ttmEPS;
-        if (price) {
-          pe = parseFloat((price / latestTTMEPS).toFixed(2));
-        } else if (latestRecord.pe) {
-          pe = latestRecord.pe;
-        }
-      }
-    } catch (error) {
-      console.log(`Could not derive current PE from historical EPS for ${symbol}:`, error.message);
-    }
-
-    if (pe === null) {
-      pe = screenerStockPE;
-    }
-    
-    // Return actual values (null if not successfully scraped - no hardcoded fallbacks)
-    console.log(`Final metrics for ${symbol}: Price=${price}, PE=${pe}, PB=${pb}, DY=${dy}, LatestTTMEPS=${latestTTMEPS}, ScreenerStockPE=${screenerStockPE}`);
-    
-    return {
-      symbol,
-      pe,
-      pb,
-      dy,
-      price,
-      change,
-      changePercent,
-      latestTTMEPS,
-      screenerStockPE,
-      source: pe !== null && latestTTMEPS !== null
-        ? 'NSE API price + hybrid EPS-derived PE'
-        : 'NSE API price + Screener top ratios'
-    };
-  } catch (error) {
-    console.error(`Error fetching metrics for ${symbol}:`, error.message);
-    return null;
-  }
-}
-
-// Stock metrics endpoint
-app.get('/api/stock-metrics/:symbol', async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    
-    if (!symbol) {
-      return res.status(400).json({
-        error: 'Missing symbol',
-        message: 'Please provide a stock symbol'
-      });
-    }
-    
-    console.log(`API: Fetching metrics for ${symbol}...`);
-    const metrics = await fetchStockMetrics(symbol);
-    
-    if (metrics) {
-      return res.json(metrics);
-    } else {
-      return res.status(503).json({
-        error: 'Unable to fetch stock metrics',
-        message: `Could not fetch metrics for ${symbol}. Please check the symbol and try again.`,
-        symbol
-      });
-    }
-  } catch (error) {
-    console.error('Stock Metrics API Error:', error);
-    res.status(500).json({
-      error: 'Stock metrics service error',
-      message: 'An error occurred while fetching stock metrics.'
-    });
-  }
-});
-
 // PE Ratio Historical Heatmap endpoint
 app.get('/api/pe-heatmap/:symbol', async (req, res) => {
   try {
@@ -680,39 +522,6 @@ app.get('/api/pe-heatmap/:symbol', async (req, res) => {
   }
 });
 
-// Historical PE Values endpoint - Calculate from Price/EPS
-// Implements the 5-step process:
-// Step 1: Add historical price API (fetch from Screener)
-// Step 2: Extract EPS history from Screener quarterly data
-// Step 3: Build TTM EPS (sum of last 4 quarters)
-// Step 4: Map dates (find nearest EPS for each price date)
-// Step 5: Calculate PE (price / ttm_eps)
-app.get('/api/historical-pe/:symbol', async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    
-    if (!symbol) {
-      return res.status(400).json({ 
-        error: 'Missing stock symbol',
-        message: 'Please provide a stock symbol'
-      });
-    }
-    
-    console.log(`\nAPI Request: Historical PE for ${symbol}`);
-
-    const response = await calculateHistoricalPE(symbol.toUpperCase());
-    console.log(`Returning ${response.totalRecords} PE records (${response.source})`);
-    res.json(response);
-    
-  } catch (error) {
-    console.error('Historical PE API Error:', error);
-    res.status(503).json({ 
-      error: 'Historical PE service unavailable',
-      message: 'Unable to calculate historical PE data from live sources.',
-      details: error.message
-    });
-  }
-});
 app.get('/api/nifty50-heatmap/:period', async (req, res) => {
   try {
     const { period } = req.params; // daily, weekly, monthly
@@ -779,198 +588,5 @@ app.get('/api/all-nifty50-stocks', async (req, res) => {
   }
 });
 
-app.get('/api/index/current', async (req, res) => {
-  try {
-    const indexRecord = getIndexByName(req.query.name);
-
-    if (!indexRecord) {
-      return res.status(404).json({
-        error: 'Index not found',
-        message: 'Please provide a valid index name such as NIFTY50, NIFTYBANK, or NIFTYIT.'
-      });
-    }
-
-    let latest = await getLatestIndexValuation(indexRecord.symbol);
-
-    if (!latest?.date) {
-      const snapshot = await fetchIndexSnapshot(indexRecord);
-      await upsertIndexValuation(indexRecord.symbol, {
-        date: new Date().toISOString().slice(0, 10),
-        price: snapshot.price,
-        pe: snapshot.pe,
-        pb: snapshot.pb,
-        dy: snapshot.dy,
-        changeAmount: snapshot.change,
-        changePercent: snapshot.changePercent,
-        source: snapshot.source
-      });
-      latest = await getLatestIndexValuation(indexRecord.symbol);
-    }
-
-    const summary = await getIndexSummary(indexRecord.symbol);
-
-    res.json({
-      ...latest,
-      asOf: latest.updatedAt || null,
-      summary
-    });
-  } catch (error) {
-    console.error('Index current API Error:', error);
-    res.status(500).json({
-      error: 'Index current service error',
-      message: 'Unable to fetch current index metrics.'
-    });
-  }
-});
-
-app.get('/api/index/history', async (req, res) => {
-  try {
-    const indexRecord = getIndexByName(req.query.name);
-
-    if (!indexRecord) {
-      return res.status(404).json({
-        error: 'Index not found',
-        message: 'Please provide a valid index name such as NIFTY50, NIFTYBANK, or NIFTYIT.'
-      });
-    }
-
-    const limit = Math.max(1, Number.parseInt(req.query.limit, 10) || 260);
-    const history = await getIndexHistory(indexRecord.symbol, limit);
-    const summary = await getIndexSummary(indexRecord.symbol);
-
-    res.json({
-      name: indexRecord.name,
-      symbol: indexRecord.symbol,
-      history: history?.history || [],
-      summary,
-      available: Boolean(history?.history?.length)
-    });
-  } catch (error) {
-    console.error('Index history API Error:', error);
-    res.status(500).json({
-      error: 'Index history service error',
-      message: 'Unable to fetch historical index PE data.'
-    });
-  }
-});
-
-app.get('/api/index/valuation', async (req, res) => {
-  try {
-    const indexRecord = getIndexByName(req.query.name);
-
-    if (!indexRecord) {
-      return res.status(404).json({
-        error: 'Index not found',
-        message: 'Please provide a valid index identifier.'
-      });
-    }
-
-    const summary = await getIndexSummary(indexRecord.symbol);
-    res.json(summary);
-  } catch (error) {
-    console.error('Index valuation API Error:', error);
-    res.status(500).json({
-      error: 'Index valuation service error',
-      message: 'Unable to compute index valuation summary.'
-    });
-  }
-});
-
-app.get('/api/index/comparison', async (req, res) => {
-  try {
-    res.json({
-      updatedAt: new Date().toISOString(),
-      indexes: await getComparisonSnapshot()
-    });
-  } catch (error) {
-    console.error('Index comparison API Error:', error);
-    res.status(500).json({
-      error: 'Index comparison service error',
-      message: 'Unable to fetch index comparison data.'
-    });
-  }
-});
-
-app.get('/api/index/list', async (req, res) => {
-  try {
-    res.json({
-      indexes: await listIndices()
-    });
-  } catch (error) {
-    console.error('Index list API Error:', error);
-    res.status(500).json({
-      error: 'Index list service error',
-      message: 'Unable to fetch index list.'
-    });
-  }
-});
-
-// Detailed Historical PE Calculation Endpoint (with step-by-step breakdown)
-app.get('/api/historical-pe-detailed/:symbol', async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    
-    if (!symbol) {
-      return res.status(400).json({ 
-        error: 'Missing stock symbol',
-        message: 'Please provide a stock symbol'
-      });
-    }
-    
-    console.log(`\n========== Detailed Historical PE Request for ${symbol} ==========\n`);
-    
-    const detailedResponse = {
-      symbol: symbol.toUpperCase(),
-      timestamp: new Date().toISOString(),
-      methodology: {
-        step1: {
-          name: 'Fetch Historical Price History',
-          description: 'Retrieve historical equity candles from NSE and build a chronological price series',
-          source: 'NSE historical equity endpoint'
-        },
-        step2: {
-          name: 'Extract EPS History from Screener',
-          description: 'Scrape quarterly EPS from company financial tables and use yearly EPS if quarterly history is not sufficient',
-          source: 'https://www.screener.in/company/{symbol}/#quarters'
-        },
-        step3: {
-          name: 'Build TTM (Trailing Twelve Months) EPS',
-          description: 'Roll four quarters into a TTM EPS series when quarterly data is available',
-          formula: 'TTM_EPS = Q1_EPS + Q2_EPS + Q3_EPS + Q4_EPS'
-        },
-        step4: {
-          name: 'Map Dates',
-          description: 'For each price date, use the latest available EPS history point before that date',
-          logic: 'latest eps date <= price date'
-        },
-        step5: {
-          name: 'Calculate PE',
-          description: 'Calculate PE ratio from price and TTM EPS',
-          formula: 'PE = Price / TTM_EPS'
-        }
-      },
-      dataFormat: {
-        priceData: ['{ date, open, high, low, close, price }'],
-        epsHistory: ['{ date, eps }'],
-        ttmEPS: '{ date, ttmEPS, source }',
-        historicalPE: ['{ date, price, ttmEPS, pe, epsDate, epsSource, status }'],
-        yearMatrix: ['{ year, months: [peJan, peFeb, ... peDec] }']
-      },
-      endpoints: {
-        standardPE: '/api/historical-pe/:symbol',
-        detailedPE: '/api/historical-pe-detailed/:symbol'
-      }
-    };
-    
-    res.json(detailedResponse);
-    
-  } catch (error) {
-    console.error('Detailed PE API Error:', error);
-    res.status(500).json({ 
-      error: 'Detailed PE service error',
-      message: 'An error occurred while providing methodology details.'
-    });
-  }
-});
 
 app.listen(4000, () => console.log('Backend running on port 4000')); 

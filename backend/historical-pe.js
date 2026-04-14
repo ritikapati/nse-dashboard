@@ -7,6 +7,7 @@ const { upsertStockFinancial, listStockFinancials } = require('./stock-financial
 const NSE_BASE_URL = 'https://www.nseindia.com';
 const SYMBOL_HISTORY_START = '2000-01-01';
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const NSE_HISTORY_TIMEOUT_MS = Number.parseInt(process.env.NSE_HISTORY_TIMEOUT_MS || '8000', 10);
 
 const monthMap = {
   jan: 0,
@@ -24,6 +25,7 @@ const monthMap = {
 };
 
 const historicalCache = new Map();
+const inFlightHistoricalCache = new Map();
 let nseCookieHeader = '';
 const allowInsecureTls = process.env.ALLOW_INSECURE_TLS !== 'false';
 const insecureHttpsAgent = allowInsecureTls ? new https.Agent({ rejectUnauthorized: false }) : undefined;
@@ -325,7 +327,7 @@ async function fetchHistoricalPricesFromNSE(symbol, startDate = SYMBOL_HISTORY_S
         from: formatNseDate(cursor),
         to: formatNseDate(chunkEnd)
       },
-      timeout: 20000,
+      timeout: NSE_HISTORY_TIMEOUT_MS,
       validateStatus: (status) => (status >= 200 && status < 300) || status === 404
     });
 
@@ -923,57 +925,71 @@ async function calculateHistoricalPE(symbol, options = {}) {
     return cached.value;
   }
 
-  const priceHistory = await fetchHistoricalPrices(normalizedSymbol, startDate, endDate);
-  const prices = priceHistory.records;
-  const { quarterlyEPS, yearlyEPS, screenerUrl } = await extractEPSHistory(normalizedSymbol);
-  const quarterlyFinancials = await getQuarterlyStockFinancials(normalizedSymbol);
-  const quarterlyRevenue = quarterlyFinancials.map((row) => ({ date: row.date, value: row.revenue })).filter((row) => Number.isFinite(row.value));
-  const quarterlyProfitAfterTax = quarterlyFinancials.map((row) => ({ date: row.date, value: row.pat })).filter((row) => Number.isFinite(row.value));
-  const ttmTimeline = buildTTMTimeline(quarterlyEPS, yearlyEPS);
-  const monthlySeries = toMonthlySeries(mapPricesToLatestEPS(prices, ttmTimeline));
-  const monthlySeriesWithRevenue = mapSeriesToLatestValue(monthlySeries, quarterlyRevenue, 'revenue');
-  const enrichedMonthlySeries = mapSeriesToLatestValue(monthlySeriesWithRevenue, quarterlyProfitAfterTax, 'profitAfterTax');
-
-  if (!enrichedMonthlySeries.length) {
-    throw new Error(`No historical PE data could be calculated for ${normalizedSymbol}`);
+  const inFlight = inFlightHistoricalCache.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
   }
 
-  const result = {
-    symbol: normalizedSymbol,
-    source: 'hybrid-calculated',
-    methodology: 'historical-price-plus-latest-available-eps',
-    totalRecords: enrichedMonthlySeries.length,
-    dateRange: {
-      from: enrichedMonthlySeries[0].date,
-      to: enrichedMonthlySeries[enrichedMonthlySeries.length - 1].date
-    },
-    data: enrichedMonthlySeries,
-    years: buildYearMatrix(enrichedMonthlySeries),
-    stats: buildStats(enrichedMonthlySeries),
-    peSummary: buildPESummary(enrichedMonthlySeries),
-    metadata: {
-      priceSource: priceHistory.source,
-      epsSource: quarterlyEPS.length >= 4 ? 'Screener quarterly EPS mapped as rolling TTM' : 'Screener yearly EPS fallback',
-      screenerUrl,
-      financialsSource: quarterlyFinancials.length ? 'NSE financial results API' : 'No stored NSE financials available',
-      priceRecordsFetched: prices.length,
-      quarterlyEPSRecords: quarterlyEPS.length,
-      quarterlyRevenueRecords: quarterlyRevenue.length,
-      quarterlyProfitAfterTaxRecords: quarterlyProfitAfterTax.length,
-      yearlyEPSRecords: yearlyEPS.length,
-      ttmRecordsBuilt: ttmTimeline.length,
-      outputFrequency: 'monthly',
-      peCleaningRule: 'Only PE values > 0 and < 150 are included, using a rolling 5-year window and excluding the latest point from low/high benchmarking',
-      peSummaryLookbackYears: 5
+  const calculationPromise = (async () => {
+    const priceHistory = await fetchHistoricalPrices(normalizedSymbol, startDate, endDate);
+    const prices = priceHistory.records;
+    const { quarterlyEPS, yearlyEPS, screenerUrl } = await extractEPSHistory(normalizedSymbol);
+    const quarterlyFinancials = await getQuarterlyStockFinancials(normalizedSymbol);
+    const quarterlyRevenue = quarterlyFinancials.map((row) => ({ date: row.date, value: row.revenue })).filter((row) => Number.isFinite(row.value));
+    const quarterlyProfitAfterTax = quarterlyFinancials.map((row) => ({ date: row.date, value: row.pat })).filter((row) => Number.isFinite(row.value));
+    const ttmTimeline = buildTTMTimeline(quarterlyEPS, yearlyEPS);
+    const monthlySeries = toMonthlySeries(mapPricesToLatestEPS(prices, ttmTimeline));
+    const monthlySeriesWithRevenue = mapSeriesToLatestValue(monthlySeries, quarterlyRevenue, 'revenue');
+    const enrichedMonthlySeries = mapSeriesToLatestValue(monthlySeriesWithRevenue, quarterlyProfitAfterTax, 'profitAfterTax');
+
+    if (!enrichedMonthlySeries.length) {
+      throw new Error(`No historical PE data could be calculated for ${normalizedSymbol}`);
     }
-  };
 
-  historicalCache.set(cacheKey, {
-    timestamp: Date.now(),
-    value: result
-  });
+    const result = {
+      symbol: normalizedSymbol,
+      source: 'hybrid-calculated',
+      methodology: 'historical-price-plus-latest-available-eps',
+      totalRecords: enrichedMonthlySeries.length,
+      dateRange: {
+        from: enrichedMonthlySeries[0].date,
+        to: enrichedMonthlySeries[enrichedMonthlySeries.length - 1].date
+      },
+      data: enrichedMonthlySeries,
+      years: buildYearMatrix(enrichedMonthlySeries),
+      stats: buildStats(enrichedMonthlySeries),
+      peSummary: buildPESummary(enrichedMonthlySeries),
+      metadata: {
+        priceSource: priceHistory.source,
+        epsSource: quarterlyEPS.length >= 4 ? 'Screener quarterly EPS mapped as rolling TTM' : 'Screener yearly EPS fallback',
+        screenerUrl,
+        financialsSource: quarterlyFinancials.length ? 'NSE financial results API' : 'No stored NSE financials available',
+        priceRecordsFetched: prices.length,
+        quarterlyEPSRecords: quarterlyEPS.length,
+        quarterlyRevenueRecords: quarterlyRevenue.length,
+        quarterlyProfitAfterTaxRecords: quarterlyProfitAfterTax.length,
+        yearlyEPSRecords: yearlyEPS.length,
+        ttmRecordsBuilt: ttmTimeline.length,
+        outputFrequency: 'monthly',
+        peCleaningRule: 'Only PE values > 0 and < 150 are included, using a rolling 5-year window and excluding the latest point from low/high benchmarking',
+        peSummaryLookbackYears: 5
+      }
+    };
 
-  return result;
+    historicalCache.set(cacheKey, {
+      timestamp: Date.now(),
+      value: result
+    });
+
+    return result;
+  })();
+
+  inFlightHistoricalCache.set(cacheKey, calculationPromise);
+  try {
+    return await calculationPromise;
+  } finally {
+    inFlightHistoricalCache.delete(cacheKey);
+  }
 }
 
 module.exports = {

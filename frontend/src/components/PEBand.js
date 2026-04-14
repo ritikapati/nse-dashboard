@@ -54,12 +54,10 @@ export default function PEBand({
   median,
   high,
   current,
-  currentLabel = 'Current PE',
-  medianLabel = 'Median Range'
+  currentLabel = 'Current PE'
 }) {
   const domainMin = Math.min(low, current);
   const domainMax = Math.max(high, current);
-  const medianPercent = 50;
   const currentPercent = toBandPercent(current, domainMin, median, domainMax);
   const [animatedPercent, setAnimatedPercent] = useState(0);
 
@@ -99,16 +97,6 @@ export default function PEBand({
               #dc2626 100%)`
           }}
         >
-          <div
-            className="pe-band-marker pe-band-marker-median"
-            style={{ left: `${medianPercent}%` }}
-          >
-            <div className="pe-band-marker-line" />
-            <div className="pe-band-marker-chip">
-              {medianLabel} {formatNumber(median)}
-            </div>
-          </div>
-
           <div
             className={`pe-band-thumb pe-band-thumb-${valuation.tone}`}
             style={{ left: `${animatedPercent}%` }}

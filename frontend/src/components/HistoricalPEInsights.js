@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CartesianGrid,
   Legend,
@@ -272,15 +272,17 @@ export default function HistoricalPEInsights({
   emptyMessage = 'No historical PE data available.',
   showBand = true,
   showChart = true,
-  sectionTitle = 'Historical PE Values',
+  sectionTitle = 'Valuation Insights',
   entityLabel = 'Market',
-  chartSeriesKeys = ['pe', 'price', 'ttmEPS', 'revenue', 'profitAfterTax']
+  chartSeriesKeys = ['pe', 'price', 'ttmEPS', 'revenue', 'profitAfterTax'],
+  defaultRangeKey = '5Y'
 }) {
   const supportedSeries = useMemo(
     () => CHART_SERIES.filter((series) => chartSeriesKeys.includes(series.key)),
     [chartSeriesKeys]
   );
-  const [selectedRange, setSelectedRange] = useState('5Y');
+  const resolveRangeKey = (value) => (RANGE_OPTIONS.some((option) => option.key === value) ? value : '5Y');
+  const [selectedRange, setSelectedRange] = useState(resolveRangeKey(defaultRangeKey));
   const [visibleSeries, setVisibleSeries] = useState(() => ({
     pe: chartSeriesKeys.includes('pe'),
     price: chartSeriesKeys.includes('price'),
@@ -305,6 +307,10 @@ export default function HistoricalPEInsights({
     () => Object.fromEntries(supportedSeries.map((series) => [series.key, chartData.some((point) => Number.isFinite(point?.[series.key]))])),
     [chartData, supportedSeries]
   );
+
+  useEffect(() => {
+    setSelectedRange(resolveRangeKey(defaultRangeKey));
+  }, [defaultRangeKey, entityLabel]);
 
   if (!chartData.length) {
     return (

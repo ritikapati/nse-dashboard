@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import HistoricalPEInsights from './components/HistoricalPEInsights';
 import { apiUrl } from './config/api';
+import { toFiniteNumber } from './utils/number';
 
 function formatStockPrice(value) {
   if (!Number.isFinite(value)) {
@@ -100,7 +101,9 @@ const Heatmap = () => {
     fetchHistoricalPE(symbol);
   };
 
-  const asOfDate = historicalPE?.peSummary?.currentDate || null;
+  const asOfDate = stockMetrics?.asOfDate || historicalPE?.peSummary?.currentDate || null;
+  const stockChange = toFiniteNumber(stockMetrics?.change);
+  const stockChangePercent = toFiniteNumber(stockMetrics?.changePercent);
   const selectedStockLabel = useMemo(() => {
     const match = heatmapData?.stocks?.find((stock) => stock.symbol === selectedStock);
     return match?.name || selectedStock || 'Stock';
@@ -209,19 +212,19 @@ const Heatmap = () => {
             <div style={{
               fontSize: '1.45em',
               fontWeight: 700,
-              color: Number.isFinite(stockMetrics.change) && stockMetrics.change >= 0 ? '#2f9e44' : '#d63336'
+              color: stockChange !== null && stockChange >= 0 ? '#2f9e44' : '#d63336'
             }}>
-              {Number.isFinite(stockMetrics.change) ? stockMetrics.change.toFixed(2) : '-'}
+              {stockChange !== null ? Math.abs(stockChange).toFixed(2) : '-'}
             </div>
             <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '6px' }}>
-              {Number.isFinite(stockMetrics.changePercent) ? `${stockMetrics.changePercent >= 0 ? '+' : ''}${stockMetrics.changePercent.toFixed(2)}%` : 'N/A'}
+              {stockChangePercent !== null ? `${Math.abs(stockChangePercent).toFixed(2)}%` : 'N/A'}
             </div>
           </div>
         </div>
       ) : null}
 
       {selectedStock ? (
-        historicalError ? (
+        isDetailsLoading ? null : historicalError ? (
           <p style={{ color: '#b00020', marginTop: '20px', textAlign: 'center', padding: '20px', fontSize: '15px' }}>
             {historicalError}
           </p>
@@ -231,6 +234,7 @@ const Heatmap = () => {
             records={historicalPE.data || []}
             entityLabel={selectedStockLabel}
             chartSeriesKeys={['pe', 'price', 'ttmEPS']}
+            defaultRangeKey="5Y"
             emptyMessage="No historical PE data available from live sources for this stock"
           />
         ) : (
@@ -238,11 +242,7 @@ const Heatmap = () => {
             No historical PE data available from live sources for this stock
           </p>
         )
-      ) : (
-        <p style={{ color: '#999', marginTop: '20px', textAlign: 'center', padding: '40px', fontSize: '16px' }}>
-          Select a stock to view historical PE data
-        </p>
-      )}
+      ) : null}
     </div>
   );
 };

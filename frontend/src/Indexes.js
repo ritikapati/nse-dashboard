@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import HistoricalPEInsights from './components/HistoricalPEInsights';
 import { apiUrl } from './config/api';
+import { toFiniteNumber } from './utils/number';
 
 function formatValue(value, suffix = '') {
   if (!Number.isFinite(value)) {
@@ -98,6 +99,8 @@ export default function Indexes() {
   }, [selectedSymbol]);
 
   const summary = currentMetrics?.summary || historyData?.summary || null;
+  const indexChange = toFiniteNumber(currentMetrics?.change);
+  const indexChangePercent = toFiniteNumber(currentMetrics?.changePercent);
   const sortedComparisonData = [...comparisonData].sort((left, right) => {
     const { key, direction } = sortConfig;
     const multiplier = direction === 'asc' ? 1 : -1;
@@ -243,12 +246,12 @@ export default function Indexes() {
               <div style={{
                 fontSize: '1.45em',
                 fontWeight: 700,
-                color: Number.isFinite(currentMetrics.change) && currentMetrics.change >= 0 ? '#2f9e44' : '#d63336'
+                color: indexChange !== null && indexChange >= 0 ? '#2f9e44' : '#d63336'
               }}>
-                {formatValue(currentMetrics.change)}
+                {indexChange !== null ? Math.abs(indexChange).toFixed(2) : 'N/A'}
               </div>
               <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '6px' }}>
-                {Number.isFinite(currentMetrics.changePercent) ? `${currentMetrics.changePercent >= 0 ? '+' : ''}${currentMetrics.changePercent.toFixed(2)}%` : 'N/A'}
+                {indexChangePercent !== null ? `${Math.abs(indexChangePercent).toFixed(2)}%` : 'N/A'}
               </div>
             </div>
           </div>
@@ -258,6 +261,7 @@ export default function Indexes() {
             records={historyData?.history || []}
             entityLabel={currentMetrics.name}
             chartSeriesKeys={['pe', 'price']}
+            defaultRangeKey="5Y"
             emptyMessage={summary?.message || historyData?.message || 'Historical index valuation data has not been imported yet.'}
           />
 

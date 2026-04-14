@@ -154,12 +154,14 @@ async function listIndices() {
       i.sector,
       i.description,
       COUNT(v.id) AS "historyRecords",
+      SUM(CASE WHEN v.source = 'NSE CSV' THEN 1 ELSE 0 END) AS "csvHistoryRecords",
       MIN(v.date)::text AS "firstHistoryDate",
       MAX(v.date)::text AS "lastHistoryDate"
     FROM indices i
     LEFT JOIN index_valuations v
       ON v.index_id = i.id
     GROUP BY i.id, i.symbol, i.slug, i.name, i.nse_index_name, i.sector, i.description
+    HAVING SUM(CASE WHEN v.source = 'NSE CSV' THEN 1 ELSE 0 END) > 0
     ORDER BY name
   `);
 }
@@ -340,6 +342,12 @@ async function getComparisonSnapshot() {
       ORDER BY iv.date DESC
       LIMIT 1
     ) v ON true
+    WHERE EXISTS (
+      SELECT 1
+      FROM index_valuations ivh
+      WHERE ivh.index_id = i.id
+        AND ivh.source = 'NSE CSV'
+    )
     ORDER BY i.name
   `);
 }

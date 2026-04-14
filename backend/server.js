@@ -3,6 +3,7 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const cheerio = require('cheerio');
+const https = require('https');
 const { calculateHistoricalPE } = require('./historical-pe');
 const { indexCatalog, getIndexByName } = require('./index-analysis-data');
 const {
@@ -82,6 +83,19 @@ let niftyLastFetch = 0;
 let allIndicesCache = null;
 let allIndicesLastFetch = 0;
 const CACHE_DURATION = 300000; // 5 minutes cache
+const allowInsecureTls = process.env.ALLOW_INSECURE_TLS !== 'false';
+const insecureHttpsAgent = allowInsecureTls ? new https.Agent({ rejectUnauthorized: false }) : undefined;
+
+function withTlsFallback(options = {}) {
+  if (!insecureHttpsAgent) {
+    return options;
+  }
+
+  return {
+    ...options,
+    httpsAgent: insecureHttpsAgent
+  };
+}
 
 function getCurrentPrice(priceInfo) {
   if (!priceInfo) {
@@ -509,12 +523,12 @@ async function fetchStockMetrics(symbol) {
 
       for (const url of getScreenerUrls(symbol)) {
         try {
-          const response = await axios.get(url, {
+          const response = await axios.get(url, withTlsFallback({
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
             timeout: 10000
-          });
+          }));
 
           html = response.data;
           console.log(`Using Screener URL for ${symbol}: ${url}`);

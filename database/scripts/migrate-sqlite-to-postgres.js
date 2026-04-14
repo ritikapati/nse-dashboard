@@ -39,13 +39,49 @@ async function migrateIndices() {
   }
 }
 
-async function migrateIndexValuations() {
+async function buildIndexIdMap() {
+  const sqliteIndices = await sqliteAll(`
+    SELECT id, symbol
+    FROM indices
+  `);
+
+  const postgresIndices = await pool.query(`
+    SELECT id, symbol
+    FROM indices
+  `);
+
+  const postgresBySymbol = new Map(
+    (postgresIndices.rows || []).map((row) => [String(row.symbol || '').toUpperCase(), row.id])
+  );
+
+  const sqliteToPostgresId = new Map();
+
+  for (const row of sqliteIndices) {
+    const symbol = String(row.symbol || '').toUpperCase();
+    const postgresId = postgresBySymbol.get(symbol);
+    if (postgresId) {
+      sqliteToPostgresId.set(row.id, postgresId);
+    }
+  }
+
+  return sqliteToPostgresId;
+}
+
+async function migrateIndexValuations(indexIdMap) {
   const rows = await sqliteAll(`
     SELECT index_id, date, price, pe, pb, div_yield, change_amount, change_percent, source, created_at, updated_at
     FROM index_valuations
   `);
 
+  let skippedRows = 0;
+
   for (const row of rows) {
+    const targetIndexId = indexIdMap.get(row.index_id);
+    if (!targetIndexId) {
+      skippedRows += 1;
+      continue;
+    }
+
     await pool.query(`
       INSERT INTO index_valuations (
         index_id, date, price, pe, pb, div_yield, change_amount, change_percent, source, created_at, updated_at
@@ -60,7 +96,11 @@ async function migrateIndexValuations() {
         change_percent = COALESCE(EXCLUDED.change_percent, index_valuations.change_percent),
         source = COALESCE(EXCLUDED.source, index_valuations.source),
         updated_at = CURRENT_TIMESTAMP
-    `, [row.index_id, row.date, row.price, row.pe, row.pb, row.div_yield, row.change_amount, row.change_percent, row.source, row.created_at, row.updated_at]);
+    `, [targetIndexId, row.date, row.price, row.pe, row.pb, row.div_yield, row.change_amount, row.change_percent, row.source, row.created_at, row.updated_at]);
+  }
+
+  if (skippedRows > 0) {
+    console.warn(`Skipped ${skippedRows} valuation rows with unmapped indices.`);
   }
 }
 
@@ -92,7 +132,8 @@ async function syncSequences() {
 async function main() {
   await initDatabase();
   await migrateIndices();
-  await migrateIndexValuations();
+  const indexIdMap = await buildIndexIdMap();
+  await migrateIndexValuations(indexIdMap);
   await migrateStockFinancials();
   await syncSequences();
   sqliteDb.close();

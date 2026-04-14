@@ -21,6 +21,7 @@ const Heatmap = () => {
   const [historicalPE, setHistoricalPE] = useState(null);
   const [historicalLoading, setHistoricalLoading] = useState(false);
   const [historicalError, setHistoricalError] = useState(null);
+  const isDetailsLoading = metricsLoading || historicalLoading;
   const period = 'monthly';
   const heatmapLimit = 100;
   const heatmapBatchSize = 8;
@@ -168,8 +169,8 @@ const Heatmap = () => {
         </div>
       )}
 
-      {metricsLoading ? (
-        <p style={{ color: '#888', marginBottom: '20px' }}>Loading metrics...</p>
+      {isDetailsLoading ? (
+        <p style={{ color: '#888', marginBottom: '20px' }}>Loading stock details...</p>
       ) : stockMetrics ? (
         <div style={{
           display: 'flex',
@@ -220,9 +221,7 @@ const Heatmap = () => {
       ) : null}
 
       {selectedStock ? (
-        historicalLoading ? (
-          <p style={{ color: '#888', marginBottom: '20px' }}>Loading historical PE data...</p>
-        ) : historicalError ? (
+        historicalError ? (
           <p style={{ color: '#b00020', marginTop: '20px', textAlign: 'center', padding: '20px', fontSize: '15px' }}>
             {historicalError}
           </p>

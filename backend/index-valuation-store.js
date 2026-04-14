@@ -154,14 +154,12 @@ async function listIndices() {
       i.sector,
       i.description,
       COUNT(v.id) AS "historyRecords",
-      SUM(CASE WHEN v.source = 'NSE CSV' THEN 1 ELSE 0 END) AS "csvHistoryRecords",
       MIN(v.date)::text AS "firstHistoryDate",
       MAX(v.date)::text AS "lastHistoryDate"
     FROM indices i
-    JOIN index_valuations v
+    LEFT JOIN index_valuations v
       ON v.index_id = i.id
     GROUP BY i.id, i.symbol, i.slug, i.name, i.nse_index_name, i.sector, i.description
-    HAVING SUM(CASE WHEN v.source = 'NSE CSV' THEN 1 ELSE 0 END) > 0
     ORDER BY name
   `);
 }
@@ -327,20 +325,21 @@ async function getComparisonSnapshot() {
       v.change_percent AS "changePercent",
       v.source
     FROM indices i
-    JOIN index_valuations v
-      ON v.id = (
-        SELECT iv.id
-        FROM index_valuations iv
-        WHERE iv.index_id = i.id
-        ORDER BY iv.date DESC
-        LIMIT 1
-      )
-    WHERE EXISTS (
-      SELECT 1
-      FROM index_valuations ivh
-      WHERE ivh.index_id = i.id
-        AND ivh.source = 'NSE CSV'
-    )
+    LEFT JOIN LATERAL (
+      SELECT
+        iv.date,
+        iv.price,
+        iv.pe,
+        iv.pb,
+        iv.div_yield,
+        iv.change_amount,
+        iv.change_percent,
+        iv.source
+      FROM index_valuations iv
+      WHERE iv.index_id = i.id
+      ORDER BY iv.date DESC
+      LIMIT 1
+    ) v ON true
     ORDER BY i.name
   `);
 }

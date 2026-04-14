@@ -1,5 +1,6 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
+const https = require('https');
 const yahooFinance = require('yahoo-finance2').default;
 const { upsertStockFinancial, listStockFinancials } = require('./stock-financial-store');
 
@@ -24,6 +25,19 @@ const monthMap = {
 
 const historicalCache = new Map();
 let nseCookieHeader = '';
+const allowInsecureTls = process.env.ALLOW_INSECURE_TLS !== 'false';
+const insecureHttpsAgent = allowInsecureTls ? new https.Agent({ rejectUnauthorized: false }) : undefined;
+
+function withTlsFallback(options = {}) {
+  if (!insecureHttpsAgent) {
+    return options;
+  }
+
+  return {
+    ...options,
+    httpsAgent: insecureHttpsAgent
+  };
+}
 
 function getScreenerUrls(symbol) {
   const normalizedSymbol = String(symbol || '').trim().toUpperCase();
@@ -311,8 +325,13 @@ async function fetchHistoricalPricesFromNSE(symbol, startDate = SYMBOL_HISTORY_S
         from: formatNseDate(cursor),
         to: formatNseDate(chunkEnd)
       },
-      timeout: 20000
+      timeout: 20000,
+      validateStatus: (status) => (status >= 200 && status < 300) || status === 404
     });
+
+    if (response.status === 404) {
+      return [];
+    }
 
     const rows = Array.isArray(response.data?.data) ? response.data.data : [];
     for (const row of rows) {
@@ -350,7 +369,7 @@ async function fetchHistoricalPricesFromYahoo(symbol, startDate = SYMBOL_HISTORY
 
   for (const endpoint of endpoints) {
     try {
-      const response = await axios.get(endpoint, {
+      const response = await axios.get(endpoint, withTlsFallback({
         headers: createYahooHeaders(),
         params: {
           period1,
@@ -363,7 +382,7 @@ async function fetchHistoricalPricesFromYahoo(symbol, startDate = SYMBOL_HISTORY
         validateStatus: () => true,
         responseType: 'text',
         transformResponse: [data => data]
-      });
+      }));
 
       if (response.status === 429) {
         throw new Error(`Yahoo chart endpoint rate-limited with status 429 at ${endpoint}`);
@@ -571,10 +590,10 @@ async function extractEPSHistory(symbol) {
 
   for (const url of getScreenerUrls(symbol)) {
     try {
-      const response = await axios.get(url, {
+      const response = await axios.get(url, withTlsFallback({
         headers: createHeaders(),
         timeout: 15000
-      });
+      }));
 
       html = response.data;
       selectedUrl = url;

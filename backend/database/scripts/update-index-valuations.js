@@ -1,6 +1,6 @@
 const axios = require('axios');
-const { indexCatalog } = require('../../backend/index-analysis-data');
-const { syncIndexCatalog, upsertIndexValuation } = require('../../backend/index-valuation-store');
+const { indexCatalog } = require('../../index-analysis-data');
+const { syncIndexCatalog, upsertIndexValuation } = require('../../index-valuation-store');
 
 const NSE_BASE_URL = 'https://www.nseindia.com/api';
 const nseHeaders = {

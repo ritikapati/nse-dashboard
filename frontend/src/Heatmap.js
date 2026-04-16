@@ -24,8 +24,8 @@ const Heatmap = () => {
   const [historicalError, setHistoricalError] = useState(null);
   const isDetailsLoading = metricsLoading || historicalLoading;
   const period = 'monthly';
-  const heatmapLimit = 100;
-  const heatmapBatchSize = 8;
+  const heatmapLimit = 30;
+  const heatmapBatchSize = 5;
 
   useEffect(() => {
     const fetchHeatmapData = async () => {

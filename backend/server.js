@@ -534,43 +534,80 @@ app.get('/api/pe-heatmap/:symbol', async (req, res) => {
   }
 });
 
+let heatmapCache = null;
+let heatmapLastFetch = 0;
+const HEATMAP_CACHE_DURATION = 2 * 60 * 1000; // 2 minutes
+
 app.get('/api/nifty50-heatmap/:period', async (req, res) => {
   try {
-    const { period } = req.params; // daily, weekly, monthly
+    const { period } = req.params;
+
     const requestedLimit = Number.parseInt(req.query.limit, 10);
     const requestedBatchSize = Number.parseInt(req.query.batchSize, 10);
+
+    // 🔥 SAFE LIMITS (prevent NSE blocking)
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
-      ? requestedLimit
-      : 100;
+      ? Math.min(requestedLimit, 30)
+      : 30;
+
     const batchSize = Number.isFinite(requestedBatchSize) && requestedBatchSize > 0
-      ? requestedBatchSize
-      : 8;
-    
-    console.log(`Fetching Nifty 50 heatmap data for ${period} period with limit=${limit} and batchSize=${batchSize}...`);
+      ? Math.min(requestedBatchSize, 5)
+      : 5;
+
+    console.log(`Heatmap request → period=${period}, limit=${limit}, batchSize=${batchSize}`);
+
+    const now = Date.now();
+
+    // 🔥 CACHE (MOST IMPORTANT)
+    if (heatmapCache && (now - heatmapLastFetch) < HEATMAP_CACHE_DURATION) {
+      console.log('Returning cached heatmap data');
+      return res.json(heatmapCache);
+    }
 
     const stocksToFetch = nifty50Symbols.slice(0, limit);
+
     const results = await fetchHeatmapStocksBatched(stocksToFetch, batchSize);
 
-    if (results.length === 0) {
-      return res.status(503).json({ 
-        error: 'Unable to fetch heatmap data from NSE API',
-        message: 'Please try again later'
+    // 🔥 HANDLE NSE BLOCKING GRACEFULLY
+    if (!results || results.length === 0) {
+      if (heatmapCache) {
+        console.log('Using stale cache due to NSE failure');
+        return res.json(heatmapCache);
+      }
+
+      return res.status(503).json({
+        error: 'NSE blocked requests',
+        message: 'Try again later or reduce load'
       });
     }
-    
-    console.log(`Returning heatmap data for ${results.length} stocks`);
-    res.json({
-      period: period,
+
+    const responseData = {
+      period,
       timestamp: new Date().toISOString(),
       stocks: results,
       totalStocks: results.length
-    });
-    
+    };
+
+    // 🔥 SAVE CACHE
+    heatmapCache = responseData;
+    heatmapLastFetch = now;
+
+    console.log(`Returning heatmap data for ${results.length} stocks`);
+
+    res.json(responseData);
+
   } catch (error) {
-    console.error('Heatmap API Error:', error);
-    res.status(503).json({ 
+    console.error('Heatmap API Error:', error.message);
+
+    // 🔥 FALLBACK TO CACHE
+    if (heatmapCache) {
+      console.log('Returning cached heatmap due to error');
+      return res.json(heatmapCache);
+    }
+
+    res.status(503).json({
       error: 'Heatmap service unavailable',
-      message: 'Unable to fetch heatmap data. Please try again later.'
+      message: 'Unable to fetch data. Please try again later.'
     });
   }
 });

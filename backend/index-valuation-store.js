@@ -1,5 +1,5 @@
 const { indexCatalog } = require('./index-analysis-data');
-const { initDatabase, run, get, all } = require('../database/lib/database');
+const { initDatabase, run, get, all } = require('./database/lib/database');
 
 function toNumber(value) {
   if (value === null || value === undefined || value === '') {

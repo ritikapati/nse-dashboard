@@ -1,6 +1,6 @@
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
-
+// require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
+require('dotenv').config();
 const { Pool } = require('pg');
 
 const databaseUrl = process.env.DATABASE_URL || [
@@ -16,18 +16,42 @@ if (!databaseUrl) {
   throw new Error('PostgreSQL connection is not configured. Set DATABASE_URL or PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD.');
 }
 
+// const pool = new Pool(
+//   process.env.DATABASE_URL
+//     ? { connectionString: process.env.DATABASE_URL }
+//     : {
+//         host: process.env.PGHOST,
+//         port: process.env.PGPORT ? Number.parseInt(process.env.PGPORT, 10) : undefined,
+//         database: process.env.PGDATABASE,
+//         user: process.env.PGUSER,
+//         password: process.env.PGPASSWORD
+//       }
+// );
+const isProduction = process.env.NODE_ENV === 'production';
+
 const pool = new Pool(
   process.env.DATABASE_URL
-    ? { connectionString: process.env.DATABASE_URL }
+    ? {
+        connectionString: process.env.DATABASE_URL,
+        ssl: isProduction
+          ? { rejectUnauthorized: false }
+          : false
+      }
     : {
         host: process.env.PGHOST,
         port: process.env.PGPORT ? Number.parseInt(process.env.PGPORT, 10) : undefined,
         database: process.env.PGDATABASE,
         user: process.env.PGUSER,
-        password: process.env.PGPASSWORD
+        password: process.env.PGPASSWORD,
+        ssl: isProduction
+          ? { rejectUnauthorized: false }
+          : false
       }
 );
 
+pool.connect()
+  .then(() => console.log('✅ PostgreSQL connected'))
+  .catch(err => console.error('❌ PostgreSQL connection error:', err.message));
 async function query(sql, params = []) {
   return pool.query(sql, params);
 }

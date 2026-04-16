@@ -140,12 +140,14 @@ async function fetchIndexSnapshot(indexMeta) {
   const now = Date.now();
 
   if (!allIndicesCache || (now - allIndicesLastFetch) >= CACHE_DURATION) {
-    const response = await axios.get(`${NSE_BASE_URL}/allIndices`, {
-      headers: nseHeaders,
-      timeout: 15000
-    });
+    await initNSESession();
 
-    allIndicesCache = Array.isArray(response.data?.data) ? response.data.data : [];
+    const response = await nseInstance.get('/allIndices');
+
+    allIndicesCache = Array.isArray(response.data?.data)
+      ? response.data.data
+      : [];
+
     allIndicesLastFetch = now;
   }
 
@@ -260,53 +262,63 @@ async function fetchHeatmapStocksBatched(symbols, batchSize = 8) {
 }
 
 // NSE API Functions
+// ================= NSE FIX (PATCH ONLY) =================
+const agent = new https.Agent({
+  keepAlive: true
+});
+
+const nseInstance = axios.create({
+  baseURL: NSE_BASE_URL,
+  httpsAgent: agent,
+  headers: nseHeaders,
+  timeout: 15000
+});
+
+let cookieInitialized = false;
+
+async function initNSESession() {
+  if (cookieInitialized) return;
+
+  try {
+    await nseInstance.get('/');
+    cookieInitialized = true;
+    console.log('NSE session initialized');
+  } catch (err) {
+    console.error('NSE session init failed:', err.message);
+  }
+}
+
+// 🔥 PATCHED VERSION (DO NOT DELETE YOUR LOGIC ABOVE THIS)
 async function fetchNSEQuote(symbol) {
   try {
-    console.log(`Attempting to fetch NSE quote for ${symbol}`);
-    const response = await axios.get(`${NSE_BASE_URL}/quote-equity?symbol=${symbol}`, {
-      headers: nseHeaders,
-      timeout: 15000,
-      validateStatus: function (status) {
-        return status >= 200 && status < 300; // Accept only successful responses
-      }
-    });
-    
+    await initNSESession();
+
+    const response = await nseInstance.get(`/quote-equity?symbol=${symbol}`);
+
     if (response.data && response.data.priceInfo) {
-      console.log(`Successfully fetched NSE data for ${symbol}`);
       return response.data;
-    } else {
-      console.log(`NSE API returned invalid data structure for ${symbol}`);
-      return null;
     }
+
+    return null;
   } catch (error) {
-    console.error(`Error fetching NSE quote for ${symbol}:`, error.response?.status || error.message);
+    console.error(`Error fetching NSE quote for ${symbol}:`, error.message);
     return null;
   }
 }
 
 async function fetchNifty50Index() {
   try {
-    console.log('Attempting to fetch Nifty 50 index data');
-    const response = await axios.get(`${NSE_BASE_URL}/equity-stockIndices?index=NIFTY%2050`, {
-      headers: nseHeaders,
-      timeout: 15000,
-      validateStatus: function (status) {
-        return status >= 200 && status < 300;
-      }
-    });
-    
-    if (response.data && response.data.data) {
-      console.log('Successfully fetched Nifty 50 index data');
-      return response.data;
-    } else {
-      console.log('NSE API returned invalid Nifty index data structure');
-      return null;
-    }
+    await initNSESession();
+
+    const response = await nseInstance.get('/equity-stockIndices?index=NIFTY%2050');
+
+    return response.data?.data ? response.data : null;
   } catch (error) {
-    console.error('Error fetching Nifty 50 index:', error.response?.status || error.message);
+    console.error('Error fetching Nifty 50 index:', error.message);
     return null;
   }
 }
+
 
 async function fetchNifty50PE() {
   try {
